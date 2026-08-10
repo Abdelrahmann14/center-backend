@@ -1,0 +1,17 @@
+# Secrets never enter the image - the platform supplies them as env vars.
+.env
+.env.*
+!.env.example
+
+# Build output and local noise; the image builds from source.
+target/
+.idea/
+*.log
+hs_err_pid*.log
+replay_pid*.log
+cwd.log
+
+# The Maven wrapper is unused here: the build stage brings its own Maven.
+.mvn/
+mvnw
+mvnw.cmd

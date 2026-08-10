@@ -1,0 +1,16 @@
+# Production. Never expose the API explorer or SQL here.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+logging:
+  level:
+    com.center: info
+    org.hibernate.SQL: warn
+
+server:
+  error:
+    include-stacktrace: never
+    include-message: never

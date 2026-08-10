@@ -1,0 +1,20 @@
+package com.center.admin.dto;
+
+import com.center.common.constants.ValidationRules;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+/**
+ * Super admin renames an Admin and/or resets its password. A blank/omitted
+ * password leaves the current one unchanged.
+ */
+public record UpdateAdminRequest(
+        @NotBlank(message = "مطلوب")
+        @Size(max = ValidationRules.USERNAME_MAX) String username,
+
+        @NotBlank(message = "مطلوب") String email,
+
+        @Size(min = ValidationRules.PASSWORD_MIN, max = ValidationRules.PASSWORD_MAX)
+        String password) {
+}

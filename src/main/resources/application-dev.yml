@@ -1,0 +1,9 @@
+# Local development. Auth is fully enforced here too — there is no bypass.
+logging:
+  level:
+    com.center: debug
+    org.hibernate.SQL: debug
+
+springdoc:
+  swagger-ui:
+    enabled: true
