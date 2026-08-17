@@ -139,9 +139,15 @@ public class SyncServiceImpl implements SyncService {
                 results.add(SyncMutationResult.rejected(m.mutationId(), m.rowId(),
                         "تعارض في البيانات - تعذّر حفظ هذا التعديل"));
             } catch (RuntimeException ex) {
+                // Anything that reached here is unexpected - not a validation
+                // refusal, not a constraint. The full stack is logged, but on a
+                // hosted box the operator cannot read those logs, and a mutation
+                // rejected for an invisible reason is a write silently lost. So
+                // the root cause travels back in the rejection message too: the
+                // client shows it, and one reproduction says exactly what broke.
                 log.error("sync: mutation {} failed", m.mutationId(), ex);
                 results.add(SyncMutationResult.rejected(m.mutationId(), m.rowId(),
-                        "تعذّر تطبيق التعديل"));
+                        "تعذّر تطبيق التعديل (" + rootCause(ex) + ")"));
             }
         }
         return new SyncPushResponse(results);
@@ -913,6 +919,30 @@ public class SyncServiceImpl implements SyncService {
             throw new com.center.common.exception.BusinessRuleException("لا يوجد سياق صلاحية للمزامنة");
         }
         return tenant;
+    }
+
+    /**
+     * The deepest cause's type and message, for an operator-visible rejection.
+     * A JDBC failure wraps the real Postgres error several layers down, so the
+     * useful line ("relation ... does not exist", "null value in column ...") is
+     * only reached by unwinding to the bottom.
+     */
+    private static String rootCause(Throwable ex) {
+        Throwable root = ex;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        String message = root.getMessage();
+        String label = root.getClass().getSimpleName();
+        if (message == null || message.isBlank()) {
+            return label;
+        }
+        message = message.strip();
+        // Keep it to one readable line in a toast.
+        if (message.length() > 300) {
+            message = message.substring(0, 300) + "…";
+        }
+        return label + ": " + message;
     }
 
     private static long parseCursor(String since) {
