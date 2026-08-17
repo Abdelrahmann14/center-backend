@@ -61,10 +61,23 @@ price is operational: it is a bare VM, so Docker, a reverse proxy for TLS
 (Caddy is one command), and firewall rules are yours to set up. Capacity for A1
 shapes is sometimes unavailable in busy regions — try a neighbouring one.
 
-**Free, and easiest — Render free web service.** One `git push` and it builds
-the Dockerfile. It suspends after 15 minutes of inactivity and takes the better
-part of a minute to wake, and the scheduled jobs do not run while it sleeps.
-Fine for showing the app to somebody; not fine as the real deployment.
+**Free, and easiest — Render free web service.** `render.yaml` in this
+repository describes the service, so Render builds the Dockerfile, issues the
+certificate and hands out an `onrender.com` address with nothing to configure
+by hand except the secrets. Two costs, both real:
+
+- It **suspends after 15 minutes without traffic** and takes about a minute to
+  wake. The scheduled jobs do not run while it sleeps — WhatsApp delivery
+  checks, the Google contacts reconciler and the external-effect outbox all
+  stall until the next request wakes it, then catch up.
+- 512 MB of RAM and a shared tenth of a CPU. `render.yaml` shrinks the heap
+  cap, the connection pool and the thread pools to fit; a PDF batch running
+  alongside normal traffic is still the thing most likely to hit the ceiling.
+
+Keeping it awake is one external cron job — cron-job.org or GitHub Actions
+calling `GET /api/health` every 10 minutes. That restores the schedulers and
+removes the cold start, and 24/7 uptime for one service is about 720 hours,
+inside the free plan's 750.
 
 **Cheapest paid that just works — Fly.io.** `fly.toml` in this repository is
 ready: one always-on `shared-cpu-1x` machine with 1 GB RAM, roughly $5/month.

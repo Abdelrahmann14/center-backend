@@ -36,8 +36,9 @@ spring:
       # Raised from 5. The background jobs (WhatsApp monitor, WhatsApp recheck,
       # Google reconcile) now run alongside requests, and the Google one holds a
       # connection across slow calls out to Google. At 5, one reconcile pass
-      # starved sign-in until it timed out after 30s.
-      maximum-pool-size: 8
+      # starved sign-in until it timed out after 30s. Overridable because a
+      # 512MB host wants fewer: each connection is memory the heap needs more.
+      maximum-pool-size: ${DB_POOL_MAX:8}
       # Hikari defaults minimumIdle to maximumPoolSize, which makes this a FIXED
       # pool: it opens every connection at boot and never releases an idle one.
       # Supabase's Session Pooler caps how many clients a project may hold, so a
@@ -50,7 +51,7 @@ spring:
       # Two at boot, growing only under real load, stays well clear of it. It is
       # also what gives idle-timeout below any meaning: a fixed pool has no idle
       # connections to time out, which is why Hikari was warning about it.
-      minimum-idle: 2
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
       # Supabase's pooler drops idle connections long before Hikari's 30-minute
       # default would retire them, so the pool kept handing out sockets the
       # server had already closed ("This connection has been closed"). Retire
