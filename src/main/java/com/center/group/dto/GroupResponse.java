@@ -19,6 +19,7 @@ public record GroupResponse(
         String centerName,
         String grade,
         @JsonProperty("is_active") boolean isActive,
+        boolean deleted,
         long studentCount,
         LocalDate lastAttendance,
         BigDecimal lessonPrice) {

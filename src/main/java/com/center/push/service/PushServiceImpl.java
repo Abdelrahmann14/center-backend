@@ -30,7 +30,7 @@ public class PushServiceImpl implements PushService {
     private static final int BATCH = 100;
 
     private final PushTokenRepository pushTokenRepository;
-    private final RestClient restClient = RestClient.create();
+    private final RestClient restClient;
 
     @Override
     @Transactional

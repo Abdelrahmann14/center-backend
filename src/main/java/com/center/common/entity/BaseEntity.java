@@ -12,8 +12,6 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.EntityListeners;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.MappedSuperclass;
 import jakarta.persistence.Version;
@@ -33,8 +31,12 @@ import lombok.Setter;
 @Setter
 public abstract class BaseEntity {
 
+    // Assigned-or-generate rather than plain @GeneratedValue: an offline client
+    // creates the row and its UUID together, and that id has to survive the sync
+    // or the row comes back down the feed as a second, indistinguishable copy.
+    // Callers that do not set an id (all of them, today) are unaffected.
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
+    @AssignedOrUuid
     private UUID id;
 
     @CreatedDate

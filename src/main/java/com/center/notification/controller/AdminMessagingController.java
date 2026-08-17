@@ -16,8 +16,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.center.notification.dto.AdminBroadcastRequest;
-import com.center.notification.dto.BroadcastResult;
 import com.center.notification.dto.MessageTemplateCreateRequest;
 import com.center.notification.dto.MessageTemplateResponse;
 import com.center.notification.dto.MessageTemplateUpdateRequest;
@@ -42,11 +40,6 @@ import lombok.RequiredArgsConstructor;
 public class AdminMessagingController {
 
     private final AdminMessagingService service;
-
-    @PostMapping("/notifications")
-    public BroadcastResult send(@Valid @RequestBody AdminBroadcastRequest request) {
-        return service.broadcast(request);
-    }
 
     @GetMapping("/outgoing")
     public List<OutgoingMessageResponse> outgoing() {

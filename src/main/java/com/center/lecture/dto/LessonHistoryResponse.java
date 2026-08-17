@@ -19,5 +19,7 @@ public record LessonHistoryResponse(
         RegistrationStatus status,
         BigDecimal examScore,
         String examGrade,
+        /** False = the lesson had no exam, so a missing score is not a miss. */
+        boolean hasExam,
         HomeworkFlag homeworkFlag) {
 }

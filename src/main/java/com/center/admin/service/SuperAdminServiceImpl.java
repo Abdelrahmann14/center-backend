@@ -81,9 +81,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class SuperAdminServiceImpl implements SuperAdminService {
 
-    private static final String NOT_FOUND = "المدير غير موجود";
+    private static final String NOT_FOUND = "المدرّس غير موجود";
     private static final String USER_NOT_FOUND = "المستخدم غير موجود";
-    private static final String NAME_TAKEN = "اسم المدير مستخدم بالفعل";
+    private static final String NAME_TAKEN = "اسم المدرّس مستخدم بالفعل";
     private static final String EMAIL_TAKEN = "هذا البريد الإلكتروني مستخدم بالفعل";
 
     private final SuperAdminRepository superAdminRepository;
@@ -98,9 +98,17 @@ public class SuperAdminServiceImpl implements SuperAdminService {
     private final OutgoingMessageRepository outgoingMessageRepository;
     private final NotificationRepository notificationRepository;
     private final com.center.student.repository.StudentRepository studentRepository;
-    private final com.center.google.repository.GoogleContactsConfigRepository googleConfigRepo;
     private final com.center.whatsapp.repository.WhatsappConfigRepository whatsappConfigRepo;
     private final org.springframework.context.ApplicationEventPublisher events;
+
+    /**
+     * Routes the transactional halves of {@link #broadcast} through the proxy;
+     * a plain {@code this.} call would bypass it and put the WhatsApp fan-out
+     * straight back inside the transaction it was just taken out of.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private SuperAdminServiceImpl self;
 
     @Override
     @Transactional(readOnly = true)
@@ -269,9 +277,48 @@ public class SuperAdminServiceImpl implements SuperAdminService {
             DayOfWeek.TUESDAY, "الثلاثاء", DayOfWeek.WEDNESDAY, "الأربعاء", DayOfWeek.THURSDAY, "الخميس",
             DayOfWeek.FRIDAY, "الجمعة");
 
+    /** One WhatsApp message the broadcast still owes, resolved but not yet sent. */
+    private record PendingSend(String phone, String body) {
+    }
+
+    /** What {@link #planBroadcast} produced: the log row and the sends it owes. */
+    private record Planned(UUID outgoingId, int recipients, List<PendingSend> sends) {
+    }
+
+    /**
+     * Deliberately NOT {@code @Transactional} - it used to be, and that is the
+     * widest-reaching instance of the problem in the codebase. A super-admin
+     * broadcast targets every recipient across EVERY workspace, and each one was
+     * a sequential WhatsApp round trip made inside a single write transaction.
+     * One of eight pooled connections was therefore held for as long as the
+     * whole fan-out took, on a request thread, while every other request in the
+     * system - every workspace's - queued behind it.
+     *
+     * <p>Resolve and persist in one short transaction, send holding nothing,
+     * then record the count. The in-app notifications commit before the first
+     * WhatsApp call, so the part that must not be lost is durable earlier than
+     * it was before.
+     */
     @Override
-    @Transactional
     public BroadcastResult broadcast(BroadcastRequest request) {
+        Planned planned = self.planBroadcast(request);
+        int whatsappSent = 0;
+        for (PendingSend send : planned.sends()) {
+            try {
+                greenApiClient.sendText("broadcast", send.phone(), send.body());
+                whatsappSent++;
+            } catch (RuntimeException e) {
+                // A single WhatsApp failure must not abort the whole broadcast.
+                log.warn("WhatsApp broadcast to a recipient failed: {}", e.getMessage());
+            }
+        }
+        self.recordSent(planned.outgoingId(), whatsappSent);
+        return new BroadcastResult(planned.recipients(), whatsappSent);
+    }
+
+    /** Persist the log row and every in-app notification; collect what to send. */
+    @Transactional
+    public Planned planBroadcast(BroadcastRequest request) {
         Set<UUID> recipients = resolveRecipients(request);
         recipients.remove(null);
         if (recipients.isEmpty()) {
@@ -303,7 +350,7 @@ public class SuperAdminServiceImpl implements SuperAdminService {
         outgoingMessageRepository.save(record);
         UUID outgoingId = record.getId();
 
-        int whatsappSent = 0;
+        List<PendingSend> sends = new ArrayList<>();
         for (UUID recipientId : recipients) {
             Map<String, String> vars = new HashMap<>(base);
             vars.putAll(global);
@@ -323,21 +370,20 @@ public class SuperAdminServiceImpl implements SuperAdminService {
             if (request.whatsapp() && mine != null) {
                 String phone = firstNonBlank(mine.get("student.phone"), mine.get("parent.phone"));
                 if (phone != null) {
-                    try {
-                        greenApiClient.sendText("broadcast", phone, stripMarkers(rendered, true));
-                        whatsappSent++;
-                    } catch (RuntimeException e) {
-                        // A single WhatsApp failure must not abort the whole broadcast.
-                        log.warn("WhatsApp broadcast to a recipient failed: {}", e.getMessage());
-                    }
+                    sends.add(new PendingSend(phone, stripMarkers(rendered, true)));
                 }
             }
         }
+        return new Planned(outgoingId, recipients.size(), sends);
+    }
 
-        record.setWhatsappSent(whatsappSent);
-        outgoingMessageRepository.save(record);
-
-        return new BroadcastResult(recipients.size(), whatsappSent);
+    /** Stamp the delivered count once the sending is over. */
+    @Transactional
+    public void recordSent(UUID outgoingId, int whatsappSent) {
+        outgoingMessageRepository.findById(outgoingId).ifPresent(row -> {
+            row.setWhatsappSent(whatsappSent);
+            outgoingMessageRepository.save(row);
+        });
     }
 
     private static Map<String, String> globalVars(String sender) {
@@ -529,6 +575,7 @@ public class SuperAdminServiceImpl implements SuperAdminService {
         User admin = new User();
         admin.setUsername(username);
         admin.setEmail(email);
+        admin.setPhone(normalizePhone(request.phone()));
         admin.setPasswordHash(passwordEncoder.encode(request.password()));
         admin.setRole(Role.ADMIN);
         // An Admin is the root of its own workspace - it has no owning admin.
@@ -572,6 +619,7 @@ public class SuperAdminServiceImpl implements SuperAdminService {
         }
         admin.setUsername(username);
         admin.setEmail(email);
+        admin.setPhone(normalizePhone(request.phone()));
         // A blank password means "leave the current one alone".
         if (request.password() != null && !request.password().isBlank()) {
             admin.setPasswordHash(passwordEncoder.encode(request.password()));
@@ -641,11 +689,25 @@ public class SuperAdminServiceImpl implements SuperAdminService {
                 .orElseThrow(() -> new ResourceNotFoundException(NOT_FOUND));
     }
 
+    /**
+     * WhatsApp addresses a number as bare digits, so anything a human typed
+     * around them (spaces, dashes, a leading +) is stripped here rather than at
+     * every send site. Blank means the admin simply has no number yet.
+     */
+    private static String normalizePhone(String phone) {
+        if (phone == null) {
+            return null;
+        }
+        String digits = phone.replaceAll("\\D", "");
+        return digits.isEmpty() ? null : digits;
+    }
+
     private AdminSummaryResponse toResponse(AdminSummaryRow row) {
         return new AdminSummaryResponse(
                 row.getId(),
                 row.getUsername(),
                 row.getEmail(),
+                row.getPhone(),
                 row.getActive(),
                 offset(row.getCreatedAt()),
                 row.getCreatedBy(),
@@ -654,20 +716,7 @@ public class SuperAdminServiceImpl implements SuperAdminService {
                 row.getStudentCount(),
                 row.getAssistantCount(),
                 PhotoCodec.toDataUrl(row.getPhotoData(), row.getPhotoType()),
-                googleConfigRepo.findById(row.getId()).map(c -> c.isEnabled()).orElse(false),
                 whatsappConfigRepo.findById(row.getId()).map(c -> c.isEnabled()).orElse(false));
-    }
-
-    @Override
-    @Transactional
-    public void setGoogleSync(UUID adminId, boolean enabled) {
-        if (superAdminRepository.findAdminSummary(adminId) == null) {
-            throw new ResourceNotFoundException(NOT_FOUND);
-        }
-        com.center.google.entity.GoogleContactsConfig cfg = googleConfigRepo.findById(adminId)
-                .orElseGet(() -> new com.center.google.entity.GoogleContactsConfig(adminId, enabled));
-        cfg.setEnabled(enabled);
-        googleConfigRepo.save(cfg);
     }
 
     @Override

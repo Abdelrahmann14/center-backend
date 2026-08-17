@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.stereotype.Component;
 
 import com.center.auth.dto.AuthenticatedUserResponse;
+import com.center.common.util.PhotoCodec;
 import com.center.user.entity.User;
 import com.center.auth.security.AuthenticatedUser;
 
@@ -33,6 +34,7 @@ public class PrincipalViewFactory {
                 .enabledModuleCodes(principal.getRole(), principal.getAdminId())
                 .stream().sorted().toList();
         return new AuthenticatedUserResponse(
-                user.getId(), user.getUsername(), user.getEmail(), user.getRole(), permissions, modules);
+                user.getId(), user.getUsername(), user.getEmail(), user.getRole(), permissions, modules,
+                PhotoCodec.toDataUrl(user.getPhotoData(), user.getPhotoType()));
     }
 }

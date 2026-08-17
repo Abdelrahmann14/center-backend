@@ -86,7 +86,43 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AccessDeniedException.class)
     public ProblemDetail onAccessDenied(AccessDeniedException ex) {
-        return problem(HttpStatus.FORBIDDEN, "هذه العملية تتطلب صلاحية المدير");
+        return problem(HttpStatus.FORBIDDEN, "هذه العملية تتطلب صلاحية المدرّس");
+    }
+
+    /**
+     * The database is unreachable - answer 503 fast, and say so plainly.
+     *
+     * <p>Without this it fell through to the catch-all below and went out as a
+     * 500, which the browser reads as "the server considered your request and
+     * refused it". It is the opposite: the request was never processed at all,
+     * and the client's offline mirror can stand in for it. A 500 makes the app
+     * show an error toast; a 503 makes it fall back to the mirror and queue the
+     * write, which is the behaviour a dropped line should produce.
+     *
+     * <p>This is the ordinary case when the workspace runs on a laptop whose
+     * internet drops: the browser still reaches the backend on localhost, but the
+     * backend can no longer reach its own hosted Postgres.
+     *
+     * <p>Logged as one line, not a stack. An outage produces one of these per
+     * request plus one per scheduler tick, and the stack is the same every time.
+     */
+    @ExceptionHandler({
+        org.springframework.dao.DataAccessResourceFailureException.class,
+        org.springframework.transaction.CannotCreateTransactionException.class,
+        org.springframework.jdbc.CannotGetJdbcConnectionException.class,
+    })
+    public ProblemDetail onDatabaseUnreachable(Exception ex) {
+        log.warn("Database unreachable: {}", rootMessage(ex));
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, "تعذّر الوصول لقاعدة البيانات");
+    }
+
+    /** The innermost cause's message - the only informative part of these. */
+    private static String rootMessage(Throwable ex) {
+        Throwable root = ex;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.getClass().getSimpleName() + ": " + root.getMessage();
     }
 
     @ExceptionHandler(OptimisticLockingFailureException.class)

@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.center.whatsapp.dto.WhatsappDelayRequest;
+import com.center.whatsapp.dto.WhatsappDelayResponse;
 import com.center.whatsapp.dto.WhatsappInstanceRequest;
 import com.center.whatsapp.dto.WhatsappResponsibilityAssignRequest;
 import com.center.whatsapp.dto.WhatsappQrResponse;
@@ -72,6 +74,18 @@ public class ServicesController {
     @Operation(summary = "Unlink a WhatsApp number")
     public WhatsappStatusResponse logout(@PathVariable UUID id) {
         return whatsapp.logout(null, id);
+    }
+
+    @GetMapping("/whatsapp/{id}/delay")
+    @Operation(summary = "The number's send delay between messages, in seconds")
+    public WhatsappDelayResponse getDelay(@PathVariable UUID id) {
+        return new WhatsappDelayResponse(whatsapp.getDelaySeconds(null, id));
+    }
+
+    @PutMapping("/whatsapp/{id}/delay")
+    @Operation(summary = "Set the number's send delay (Green API reboots the instance)")
+    public WhatsappDelayResponse setDelay(@PathVariable UUID id, @Valid @RequestBody WhatsappDelayRequest req) {
+        return new WhatsappDelayResponse(whatsapp.setDelaySeconds(null, id, req.delaySeconds()));
     }
 
     @GetMapping("/whatsapp/responsibilities")

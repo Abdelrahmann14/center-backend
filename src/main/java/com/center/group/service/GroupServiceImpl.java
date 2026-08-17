@@ -10,11 +10,13 @@ import org.springframework.transaction.annotation.Transactional;
 import com.center.group.dto.GroupRequest;
 import com.center.group.dto.GroupResponse;
 import com.center.group.entity.Group;
+import com.center.common.exception.BusinessRuleException;
 import com.center.common.exception.DuplicateResourceException;
 import com.center.common.exception.ResourceNotFoundException;
 import com.center.group.mapper.GroupMapper;
 import com.center.group.repository.GroupRepository;
 import com.center.group.service.GroupService;
+import com.center.student.repository.StudentRepository;
 
 import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +29,7 @@ public class GroupServiceImpl implements GroupService {
     private static final String DUPLICATE_SLOT = "يوجد مجموعة أخرى في نفس اليوم والوقت";
 
     private final GroupRepository groupRepository;
+    private final StudentRepository studentRepository;
     private final GroupMapper groupMapper;
     private final EntityManager entityManager;
 
@@ -63,6 +66,29 @@ public class GroupServiceImpl implements GroupService {
         return refresh(groupRepository.save(group));
     }
 
+    /**
+     * The offline replay path. The slot check still runs and can still refuse:
+     * a device with no line cannot know another already took Saturday 16:00, so
+     * this is the only place that clash can surface, and it has to surface
+     * rather than one group silently landing on top of the other.
+     */
+    @Override
+    @Transactional
+    public GroupResponse upsert(UUID groupId, GroupRequest request) {
+        short day = request.dayOfWeek().shortValue();
+        LocalTime start = LocalTime.parse(request.startTime());
+        if (groupRepository.existsByDayOfWeekAndStartTimeAndIdNot(day, start, groupId)) {
+            throw new DuplicateResourceException(DUPLICATE_SLOT);
+        }
+        Group group = groupRepository.findById(groupId).orElse(null);
+        if (group == null) {
+            group = new Group();
+            group.setId(groupId);
+        }
+        apply(group, request, day, start);
+        return refresh(groupRepository.save(group));
+    }
+
     @Override
     @Transactional
     public GroupResponse setActive(UUID groupId, boolean active) {
@@ -74,11 +100,36 @@ public class GroupServiceImpl implements GroupService {
 
     @Override
     @Transactional
-    public void delete(UUID groupId) {
-        if (!groupRepository.existsById(groupId)) {
-            throw new ResourceNotFoundException(NOT_FOUND);
+    public void delete(UUID groupId, UUID transferToGroupId) {
+        Group group = groupRepository.findById(groupId)
+                .orElseThrow(() -> new ResourceNotFoundException(NOT_FOUND));
+
+        // No student may be left without a group: transfer them to the chosen
+        // target first. A group with no students needs no target.
+        long students = studentRepository.countByGroup_Id(groupId);
+        if (students > 0) {
+            if (transferToGroupId == null) {
+                throw new BusinessRuleException("اختر مجموعة لنقل طلاب هذه المجموعة إليها قبل حذفها");
+            }
+            if (transferToGroupId.equals(groupId)) {
+                throw new BusinessRuleException("لا يمكن نقل الطلاب إلى نفس المجموعة");
+            }
+            Group target = groupRepository.findById(transferToGroupId)
+                    .orElseThrow(() -> new ResourceNotFoundException("مجموعة النقل غير موجودة"));
+            if (target.isDeleted()) {
+                throw new BusinessRuleException("لا يمكن النقل إلى مجموعة محذوفة");
+            }
+            if (!target.getGrade().equals(group.getGrade())) {
+                throw new BusinessRuleException("مجموعة النقل يجب أن تكون في نفس الصف");
+            }
+            studentRepository.reassignGroup(groupId, target);
         }
-        groupRepository.deleteById(groupId);
+
+        // Soft delete: keep the row (past registrations/attendance still resolve its
+        // label), but hide it from every forward-looking picker.
+        group.setActive(false);
+        group.setDeleted(true);
+        groupRepository.save(group);
     }
 
     /**
@@ -98,5 +149,10 @@ public class GroupServiceImpl implements GroupService {
         group.setStartTime(start);
         group.setCenterName(request.centerName().strip());
         group.setGrade(request.grade().strip());
+        // Null means "not stated": the online form has a separate PATCH for the
+        // flag and must not switch a group off just by leaving the field out.
+        if (request.isActive() != null) {
+            group.setActive(request.isActive());
+        }
     }
 }

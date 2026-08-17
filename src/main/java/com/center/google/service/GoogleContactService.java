@@ -12,6 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.center.google.dto.GoogleMarkRequest;
 import com.center.google.dto.GoogleMarkResponse;
+import com.center.google.client.GoogleRateLimitException;
+import com.center.google.dto.GoogleResyncBatch;
 import com.center.google.dto.GoogleResyncResult;
 import com.center.google.dto.GoogleStatusResponse;
 import com.center.google.entity.GoogleAccount;
@@ -20,7 +22,6 @@ import com.center.google.entity.GradeContactMark;
 import com.center.student.entity.Student;
 import com.center.common.exception.BusinessRuleException;
 import com.center.google.repository.GoogleAccountRepository;
-import com.center.google.repository.GoogleContactsConfigRepository;
 import com.center.google.repository.GradeContactMarkRepository;
 import com.center.grade.repository.GradeRepository;
 import com.center.student.repository.StudentRepository;
@@ -37,7 +38,6 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class GoogleContactService {
 
-    private final GoogleContactsConfigRepository configRepo;
     private final GoogleAccountRepository accountRepo;
     private final GradeContactMarkRepository markRepo;
     private final GradeRepository gradeRepo;
@@ -54,8 +54,17 @@ public class GoogleContactService {
         return id;
     }
 
-    private boolean enabled(UUID adminId) {
-        return configRepo.findById(adminId).map(c -> c.isEnabled()).orElse(false);
+    /**
+     * Google Contacts is available to every admin, unconditionally.
+     *
+     * <p>It used to sit behind a per-admin switch the super admin had to flip.
+     * That switch is gone: syncing contacts costs the platform nothing, so
+     * gating it only produced workspaces that silently failed to save numbers.
+     * The only thing that can still block it is the server-side OAuth
+     * configuration, which is a deployment fact rather than a per-admin one.
+     */
+    private static boolean enabled(UUID adminId) {
+        return true;
     }
 
     @Transactional(readOnly = true)
@@ -74,19 +83,22 @@ public class GoogleContactService {
         if (!oauth.configured()) {
             throw new BusinessRuleException("لم يتم إعداد تكامل Google بعد");
         }
-        if (!enabled(adminId)) {
-            throw new BusinessRuleException("مزامنة جهات اتصال Google غير مُفعّلة لحسابك");
-        }
         return oauth.authUrl(UUID.randomUUID().toString());
     }
 
-    /** Exchange the OAuth code and store (or refresh) the connected account. */
-    @Transactional
+    /**
+     * Exchange the OAuth code and store (or refresh) the connected account.
+     *
+     * <p>Deliberately NOT {@code @Transactional}: the first two statements are
+     * round trips to Google, and wrapping them meant a pooled connection was
+     * checked out for the whole exchange - up to fifty seconds against the
+     * configured timeouts - to perform a single row write at the end. There is
+     * nothing here to make atomic; the write is one idempotent upsert, and the
+     * back-fill event now fires after that write has already committed rather
+     * than after a transaction that also contained the network.
+     */
     public GoogleStatusResponse connect(String code) {
         UUID adminId = adminId();
-        if (!enabled(adminId)) {
-            throw new BusinessRuleException("مزامنة جهات اتصال Google غير مُفعّلة لحسابك");
-        }
         GoogleOAuthClient.Tokens tokens = oauth.exchangeCode(code);
         String email = oauth.userEmail(tokens.accessToken());
         if (email == null || email.isBlank()) {
@@ -155,20 +167,70 @@ public class GoogleContactService {
         return s == null || s.isBlank() ? null : s.strip();
     }
 
-    /** Force a full re-sync of every student now; surfaces the first real error. */
+    /**
+     * Force a full re-sync of every student now; surfaces the first real error.
+     *
+     * <p>Reads ids only - loading the whole roster as entities to take the
+     * primary key off each was pure waste. What this does NOT fix is that the
+     * Google calls still happen inline, one student at a time, on the request
+     * thread: a large roster is thousands of sequential round trips in a single
+     * HTTP request, which will hit a proxy timeout long before it finishes and
+     * invites the user to press the button again. Routing it through the outbox
+     * (as {@code reconcile} already does) would fix that, but it changes what
+     * the button can honestly report back - "queued" rather than "N contacts
+     * written" - and that is a product decision, not a load fix.
+     */
     public GoogleResyncResult resyncAll() {
         UUID adminId = adminId();
-        if (!enabled(adminId)) {
-            throw new BusinessRuleException("مزامنة جهات اتصال Google غير مُفعّلة لحسابك");
-        }
-        if (accountRepo.findByAdminIdOrderByEmailAsc(adminId).isEmpty()) {
-            throw new BusinessRuleException("لا يوجد حساب Google مرتبط");
-        }
-        List<UUID> ids = studentRepository.findAll().stream().map(Student::getId).toList();
+        List<UUID> ids = roster(adminId);
         int contacts = 0;
         for (UUID id : ids) {
             contacts += syncService.syncStudentThrowing(adminId, id);
         }
         return new GoogleResyncResult(ids.size(), contacts);
+    }
+
+    /** Most students one request will carry - see {@link GoogleResyncBatch}. */
+    private static final int MAX_BATCH = 25;
+
+    /**
+     * Sync one slice of the roster and say how much is left.
+     *
+     * <p>This is the same work {@link #resyncAll()} does, cut into pieces the
+     * caller drives: each call writes the contacts for a handful of students and
+     * reports the roster size, so the screen can show how far it has come and the
+     * request never runs long enough to be cut off in the middle.
+     *
+     * <p>The order is by student id, which does not change, so a slice boundary
+     * means the same thing on the next call. A student added while a run is in
+     * flight can shift what a later slice covers by one - the reconciliation job
+     * picks them up regardless, and every write here is an idempotent upsert.
+     */
+    public GoogleResyncBatch resyncBatch(int offset, int limit) {
+        UUID adminId = adminId();
+        List<UUID> ids = roster(adminId);
+        int total = ids.size();
+        int from = Math.min(Math.max(offset, 0), total);
+        int to = Math.min(total, from + Math.min(Math.max(limit, 1), MAX_BATCH));
+        try {
+            GoogleContactSyncService.AuditResult r = syncService.auditStudents(adminId, ids.subList(from, to));
+            return new GoogleResyncBatch(total, to, r.ok(), r.updated(), r.created(), 0, to >= total);
+        } catch (GoogleRateLimitException ex) {
+            // Google's minute is full. Nothing here failed and nothing was lost:
+            // the slice simply did not run, so the caller is told how long to
+            // wait and asks for the SAME offset again.
+            return new GoogleResyncBatch(total, from, 0, 0, 0, ex.retryAfterSeconds(), false);
+        }
+    }
+
+    /** Every student's id, in a stable order, for a workspace with an account. */
+    private List<UUID> roster(UUID adminId) {
+        if (accountRepo.findByAdminIdOrderByEmailAsc(adminId).isEmpty()) {
+            throw new BusinessRuleException("لا يوجد حساب Google مرتبط");
+        }
+        return studentRepository.findRoster(adminId).stream()
+                .map(StudentRepository.RosterRow::getId)
+                .sorted()
+                .toList();
     }
 }

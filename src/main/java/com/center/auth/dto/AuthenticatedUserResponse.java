@@ -18,5 +18,7 @@ public record AuthenticatedUserResponse(
         String email,
         Role role,
         List<String> permissions,
-        List<String> modules) {
+        List<String> modules,
+        /** Profile photo as a base64 data URL, or null when none is set. */
+        String photo) {
 }

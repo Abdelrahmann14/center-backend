@@ -10,6 +10,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
@@ -60,9 +63,25 @@ public class WhatsappInstanceService {
     private final UserRepository userRepository;
     private final NotificationService notificationService;
     private final SettingsService settings;
-    private final RestClient rest = RestClient.create();
+    private final RestClient rest;
+
+    /**
+     * Routes the transactional halves of a refresh back through the proxy. A
+     * plain {@code this.} call would bypass it, and the whole point below is that
+     * the network part runs with NO transaction while the write part runs in a
+     * short one.
+     */
+    @Autowired
+    @Lazy
+    private WhatsappInstanceService self;
 
     public record Creds(String baseUrl, String instanceId, String apiToken, boolean configured) {}
+
+    /**
+     * One number's live answer from Green API, gathered with no transaction open.
+     * A null {@code state} means the number could not be reached this pass.
+     */
+    public record Probe(UUID id, String state, String phone) {}
 
     private static boolean isAuthorized(String state) {
         return "authorized".equalsIgnoreCase(state);
@@ -129,17 +148,65 @@ public class WhatsappInstanceService {
 
     // ---- number pool (UI) - scoped by owner ---------------------------------
 
-    @Transactional
+    /**
+     * The owner's numbers with their state refreshed from Green API.
+     *
+     * <p>Deliberately NOT {@code @Transactional}. It used to be, and that made
+     * the Services page the most expensive endpoint in the product: every call
+     * opened a WRITE transaction, then made two Green API round trips per number
+     * inside it, holding one of eight pooled connections - and row locks - for
+     * the whole conversation. The web app polls this endpoint every three
+     * seconds while the QR modal is open, so a pool with four numbers and a slow
+     * Green API could keep a connection checked out continuously.
+     *
+     * <p>Three short steps instead: read the pool, talk to Green API with
+     * nothing held, write the answers back. Only the last step is a transaction,
+     * and it contains no network call.
+     */
     public List<WhatsappStatusResponse> list(UUID owner) {
         if (!enabledFor(owner)) {
             return List.of();
         }
+        return self.applyProbes(owner, probe(pool(owner)));
+    }
+
+    /**
+     * Ask Green API about each number. Runs with no transaction and no lock, so
+     * however long the third party takes, it takes it on its own.
+     */
+    private List<Probe> probe(List<WhatsappInstance> pool) {
+        List<Probe> out = new ArrayList<>(pool.size());
+        for (WhatsappInstance w : pool) {
+            String live = fetchState(w);
+            // Only an authorized number has a phone to report, which is what the
+            // original in-transaction version did too.
+            String phone = live != null && isAuthorized(live) ? fetchPhone(w) : null;
+            out.add(new Probe(w.getId(), live, phone));
+        }
+        return out;
+    }
+
+    /** Write one pass's probes back, and answer with the owner's refreshed pool. */
+    @Transactional
+    public List<WhatsappStatusResponse> applyProbes(UUID owner, List<Probe> probes) {
+        Map<UUID, Probe> byId = new java.util.HashMap<>();
+        for (Probe p : probes) {
+            byId.put(p.id(), p);
+        }
         List<WhatsappStatusResponse> out = new ArrayList<>();
         for (WhatsappInstance w : pool(owner)) {
-            refreshAndReconcile(w);
+            reconcile(w, byId.get(w.getId()));
             out.add(toStatus(w));
         }
         return out;
+    }
+
+    /** Write one pass's probes back for numbers across every owner (the monitor). */
+    @Transactional
+    public void applyProbes(List<Probe> probes) {
+        for (Probe p : probes) {
+            repo.findById(p.id()).ifPresent(w -> reconcile(w, p));
+        }
     }
 
     @Transactional
@@ -205,6 +272,61 @@ public class WhatsappInstanceService {
         return toStatus(w);
     }
 
+    // ---- send delay (Green API account setting, per instance) ---------------
+
+    /**
+     * The pause Green API leaves between outgoing messages, in whole seconds.
+     * Read straight from the instance's live settings rather than mirrored, so it
+     * reflects whatever is actually in force (including a value set on the Green
+     * API dashboard).
+     */
+    @Transactional(readOnly = true)
+    @SuppressWarnings("unchecked")
+    public int getDelaySeconds(UUID owner, UUID id) {
+        WhatsappInstance w = require(owner, id);
+        try {
+            Map<String, Object> res = rest.get()
+                    .uri(w.getBaseUrl() + "/waInstance{id}/getSettings/{token}",
+                            w.getInstanceId(), w.getApiToken())
+                    .retrieve()
+                    .body(Map.class);
+            Object v = res == null ? null : res.get("delaySendMessagesMilliseconds");
+            long ms = v == null ? 0L : Math.round(Double.parseDouble(String.valueOf(v)));
+            return (int) Math.round(ms / 1000.0);
+        } catch (RestClientException ex) {
+            log.error("Green API getSettings failed: {}", ex.getMessage());
+            throw new BusinessRuleException("تعذّر جلب إعدادات الرقم، حاول مرة أخرى");
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
+    }
+
+    /**
+     * Sets the send delay in whole seconds via Green API {@code setSettings}. Green
+     * API reboots the instance on this call and the new value applies within a few
+     * minutes - the UI warns about both.
+     */
+    @Transactional(readOnly = true)
+    public int setDelaySeconds(UUID owner, UUID id, int seconds) {
+        if (seconds < 1 || seconds > 600) {
+            throw new BusinessRuleException("التأخير يجب أن يكون بين ثانية واحدة و600 ثانية");
+        }
+        WhatsappInstance w = require(owner, id);
+        try {
+            rest.post()
+                    .uri(w.getBaseUrl() + "/waInstance{id}/setSettings/{token}",
+                            w.getInstanceId(), w.getApiToken())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("delaySendMessagesMilliseconds", seconds * 1000))
+                    .retrieve()
+                    .toBodilessEntity();
+            return seconds;
+        } catch (RestClientException ex) {
+            log.error("Green API setSettings failed: {}", ex.getMessage());
+            throw new BusinessRuleException("تعذّر حفظ التأخير، حاول مرة أخرى");
+        }
+    }
+
     // ---- responsibilities - scoped by owner ---------------------------------
 
     @Transactional(readOnly = true)
@@ -236,28 +358,31 @@ public class WhatsappInstanceService {
 
     // ---- monitoring / failover (all scopes) ---------------------------------
 
-    @Transactional
+    /**
+     * Same split as {@link #list}: probe every number with nothing held, then
+     * write the answers back in one short transaction. This runs on the
+     * scheduler every 60 seconds, so the old version held a write transaction
+     * open across 2N Green API calls once a minute, forever.
+     */
     public void monitor() {
-        for (WhatsappInstance w : repo.findAll()) {
-            refreshAndReconcile(w);
-        }
+        self.applyProbes(probe(repo.findAll()));
     }
 
-    private void refreshAndReconcile(WhatsappInstance w) {
-        String live = fetchState(w);
-        if (live == null) {
+    /** Fold one probe into its row. Called only from inside a write transaction. */
+    private void reconcile(WhatsappInstance w, Probe p) {
+        if (p == null || p.state() == null) {
+            // Unreachable this pass. Leaving the last known state alone is what
+            // keeps a Green API outage from being read as "every number dropped"
+            // and triggering a storm of failovers and notifications.
             return;
         }
         String prev = w.getState();
-        if (isAuthorized(prev) && !isAuthorized(live)) {
-            handleDown(w, live, false);
+        if (isAuthorized(prev) && !isAuthorized(p.state())) {
+            handleDown(w, p.state(), false);
         }
-        w.setState(live);
-        if (isAuthorized(live)) {
-            String phone = fetchPhone(w);
-            if (phone != null) {
-                w.setPhone(phone);
-            }
+        w.setState(p.state());
+        if (isAuthorized(p.state()) && p.phone() != null) {
+            w.setPhone(p.phone());
         }
     }
 

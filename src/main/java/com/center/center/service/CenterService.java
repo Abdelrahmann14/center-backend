@@ -14,5 +14,12 @@ public interface CenterService {
 
     CenterResponse update(UUID centerId, CenterRequest request);
 
+    /**
+     * Create or update under an id the CLIENT chose, for replaying a write made
+     * offline. The price list travels with the center, exactly as on the online
+     * path - it is saved as one unit, so it syncs as one unit.
+     */
+    CenterResponse upsert(UUID centerId, CenterRequest request);
+
     void delete(UUID centerId);
 }

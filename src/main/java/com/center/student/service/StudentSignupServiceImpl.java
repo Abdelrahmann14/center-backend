@@ -237,6 +237,8 @@ public class StudentSignupServiceImpl implements StudentSignupService {
             studentRepository.save(student);
             events.publishEvent(new com.center.google.event.GoogleContactEvents.StudentChanged(
                     request.adminId(), student.getId()));
+            events.publishEvent(new com.center.messaging.event.StudentCreatedEvent(
+                    request.adminId(), student.getId()));
 
             log.info("New student '{}' registered under admin {}", name, request.adminId());
             return autoLogin(account);

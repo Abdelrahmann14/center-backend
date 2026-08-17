@@ -25,6 +25,8 @@ public record StudentResponse(
         AcademicTrack academicTrack,
         BigDecimal lessonPrice,
         @JsonProperty("is_discounted") boolean isDiscounted,
+        /** Why the student pays below the center's price; null at full price. */
+        String discountReason,
         String notes,
         @JsonProperty("is_active") boolean isActive,
         /** Why the student is blocked; null while they are active. */

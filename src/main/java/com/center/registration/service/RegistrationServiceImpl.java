@@ -10,6 +10,7 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -33,6 +34,7 @@ import com.center.common.exception.DuplicateResourceException;
 import com.center.common.exception.ResourceNotFoundException;
 import com.center.registration.mapper.RegistrationMapper;
 import com.center.lecture.repository.AttendanceRepository;
+import com.center.messaging.event.AttendanceRecordedEvent;
 import com.center.group.repository.GroupRepository;
 import com.center.lecture.repository.LectureRepository;
 import com.center.registration.repository.RegistrationRepository;
@@ -61,6 +63,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     private final AttendanceRepository attendanceRepository;
     private final RegistrationMapper registrationMapper;
     private final EntityManager entityManager;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional(readOnly = true)
@@ -109,6 +112,7 @@ public class RegistrationServiceImpl implements RegistrationService {
                         row.getStatus() == null ? RegistrationStatus.ABSENT : row.getStatus(),
                         row.getExamScore(),
                         row.getExamGrade(),
+                        row.getHasExam(),
                         row.getHomeworkFlag()))
                 .toList();
     }
@@ -116,7 +120,15 @@ public class RegistrationServiceImpl implements RegistrationService {
     @Override
     @Transactional
     public RegistrationResponse register(CreateRegistrationRequest request) {
-        if (registrationRepository.existsByLectureIdAndStudentId(request.lectureId(), request.studentId())) {
+        // A student may attend the same lesson again under a DIFFERENT group (a
+        // confirmed repeat, gated in the UI), so a duplicate is one that repeats
+        // the SAME group. A group-less registration keeps the old lesson-wide
+        // guard, since there is no group to distinguish repeats.
+        boolean duplicate = request.groupId() == null
+                ? registrationRepository.existsByLectureIdAndStudentId(request.lectureId(), request.studentId())
+                : registrationRepository.existsByLectureIdAndStudentIdAndGroupId(
+                        request.lectureId(), request.studentId(), request.groupId());
+        if (duplicate) {
             throw new DuplicateResourceException(ALREADY_REGISTERED);
         }
 
@@ -141,12 +153,16 @@ public class RegistrationServiceImpl implements RegistrationService {
         registration.setGroup(group);
         registration.setStatus(request.statusOrDefault());
         registration.setHomeworkFlag(request.homeworkFlag());
+        registration.setAttendedAt(request.attendedAtOrNow());
         registrationRepository.saveAndFlush(registration);
 
         // Keeps the group attendance log live - it feeds the Groups cards'
         // آخر حضور and counts. One row per (group, student, day).
         if (group != null) {
             attendanceRepository.logToday(group.getId(), student.getId(), TenantContext.get());
+            // Fires the automated attendance message AFTER this commits.
+            events.publishEvent(new AttendanceRecordedEvent(
+                    TenantContext.get(), student.getId(), group.getId(), lecture.getId()));
         }
 
         return reload(registration);
@@ -172,7 +188,85 @@ public class RegistrationServiceImpl implements RegistrationService {
         }
 
         registration.setExamScore(examScore);
+        // Saving a mark sends nothing. Grades leave the building only when the
+        // teacher presses send on the lesson's roster, once the column is done -
+        // a mark typed here is as likely to be corrected in the next minute as
+        // it is to be final, and a message already read cannot be corrected.
         return reload(registrationRepository.saveAndFlush(registration));
+    }
+
+    /**
+     * The offline replay path.
+     *
+     * <p>The row is resolved by its NATURAL key first, not by the client's id:
+     * two devices registering the same student for the same lesson under the same
+     * group mint two different row ids for what the database treats as one row,
+     * and inserting the second would break {@code unique (lecture_id, student_id,
+     * group_id)}. Finding that row and updating it converges instead - which is
+     * why registrations, alone among these entities, cannot produce a conflict.
+     * A different group is a distinct row (a repeat attendance), by design.
+     *
+     * <p>The blocked-student rule still runs: a student blocked while the device
+     * was offline must not slip in through a queued registration.
+     */
+    @Override
+    @Transactional
+    public RegistrationResponse upsert(UUID registrationId, CreateRegistrationRequest request,
+            BigDecimal examScore) {
+        // Resolve on the full natural key (lecture, student, group) so a repeat in
+        // another group is its own row rather than colliding with the first.
+        Registration registration = (request.groupId() == null
+                ? registrationRepository.findByLectureIdAndStudentId(request.lectureId(), request.studentId())
+                : registrationRepository.findByLectureIdAndStudentIdAndGroupId(
+                        request.lectureId(), request.studentId(), request.groupId()))
+                .orElse(null);
+        // Only a brand-new attendance fires the message; a replayed edit does not.
+        boolean created = registration == null;
+
+        if (registration == null) {
+            Lecture lecture = lectureRepository.findById(request.lectureId())
+                    .orElseThrow(() -> new ResourceNotFoundException("الحصة غير موجودة"));
+            Student student = studentRepository.findById(request.studentId())
+                    .orElseThrow(() -> new ResourceNotFoundException("الطالب غير موجود"));
+            if (!student.isActive()) {
+                String reason = student.getBlockReason();
+                throw new BusinessRuleException(reason == null || reason.isBlank()
+                        ? "الطالب محظور ولا يمكن تسجيله في الحصص"
+                        : "الطالب محظور: " + reason);
+            }
+            registration = new Registration();
+            registration.setId(registrationId);
+            registration.setLecture(lecture);
+            registration.setStudent(student);
+            // The device's own reading of when the student walked in. Set only on
+            // creation: a replayed edit must never move the attendance time.
+            registration.setAttendedAt(request.attendedAtOrNow());
+        }
+
+        Group group = request.groupId() == null ? null : groupRepository.findById(request.groupId())
+                .orElseThrow(() -> new ResourceNotFoundException("المجموعة غير موجودة"));
+        registration.setGroup(group);
+        registration.setStatus(request.statusOrDefault());
+        registration.setHomeworkFlag(request.homeworkFlag());
+
+        BigDecimal maximum = maximumGrade(registration.getLecture().getExamGrade());
+        if (examScore != null && maximum != null && examScore.compareTo(maximum) > 0) {
+            throw new BusinessRuleException(
+                    "الدرجة لا يمكن أن تتجاوز " + maximum.stripTrailingZeros().toPlainString());
+        }
+        registration.setExamScore(examScore);
+        registrationRepository.saveAndFlush(registration);
+
+        if (group != null) {
+            attendanceRepository.logToday(group.getId(), registration.getStudent().getId(),
+                    TenantContext.get());
+            if (created) {
+                events.publishEvent(new AttendanceRecordedEvent(TenantContext.get(),
+                        registration.getStudent().getId(), group.getId(),
+                        registration.getLecture().getId()));
+            }
+        }
+        return reload(registration);
     }
 
     @Override

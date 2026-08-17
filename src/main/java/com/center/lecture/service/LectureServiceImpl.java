@@ -13,6 +13,7 @@ import com.center.lecture.dto.LectureRequest;
 import com.center.analytics.dto.GradeCountResponse;
 import com.center.lecture.dto.LectureResponse;
 import com.center.lecture.entity.Lecture;
+import com.center.common.exception.DuplicateResourceException;
 import com.center.common.exception.ResourceNotFoundException;
 import com.center.lecture.mapper.LectureMapper;
 import com.center.lecture.repository.LectureRepository;
@@ -27,6 +28,9 @@ import lombok.RequiredArgsConstructor;
 public class LectureServiceImpl implements LectureService {
 
     private static final String NOT_FOUND = "الحصة غير موجودة";
+    private static final String DUPLICATE_NAME = "يوجد حصة أخرى بنفس الاسم في هذه المرحلة";
+    /** Stands in for "no lesson to exclude" on create - never a real id. */
+    private static final UUID NO_EXCLUSION = new UUID(0L, 0L);
 
     private final LectureRepository lectureRepository;
     private final LectureMapper lectureMapper;
@@ -55,6 +59,7 @@ public class LectureServiceImpl implements LectureService {
     @Override
     @Transactional
     public LectureResponse create(LectureRequest request) {
+        ensureUniqueName(request, NO_EXCLUSION);
         Lecture lecture = new Lecture();
         apply(lecture, request);
         return lectureMapper.toResponse(lectureRepository.save(lecture));
@@ -63,7 +68,22 @@ public class LectureServiceImpl implements LectureService {
     @Override
     @Transactional
     public LectureResponse update(UUID lectureId, LectureRequest request) {
+        ensureUniqueName(request, lectureId);
         Lecture lecture = findEntity(lectureId);
+        apply(lecture, request);
+        return lectureMapper.toResponse(lectureRepository.save(lecture));
+    }
+
+    /** The offline replay path: same validation, id supplied by the client. */
+    @Override
+    @Transactional
+    public LectureResponse upsert(UUID lectureId, LectureRequest request) {
+        ensureUniqueName(request, lectureId);
+        Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
+        if (lecture == null) {
+            lecture = new Lecture();
+            lecture.setId(lectureId);
+        }
         apply(lecture, request);
         return lectureMapper.toResponse(lectureRepository.save(lecture));
     }
@@ -82,11 +102,29 @@ public class LectureServiceImpl implements LectureService {
                 .orElseThrow(() -> new ResourceNotFoundException(NOT_FOUND));
     }
 
+    /** A lesson name may not repeat within one grade (case-insensitive). */
+    private void ensureUniqueName(LectureRequest request, UUID excludeId) {
+        String grade = TextUtils.blankToNull(request.grade());
+        String name = request.name() == null ? "" : request.name().strip();
+        if (grade == null || name.isEmpty()) {
+            return;
+        }
+        if (lectureRepository.existsDuplicateName(grade, name, excludeId)) {
+            throw new DuplicateResourceException(DUPLICATE_NAME);
+        }
+    }
+
     private static void apply(Lecture lecture, LectureRequest request) {
         lecture.setName(request.name().strip());
         lecture.setGrade(TextUtils.blankToNull(request.grade()));
-        lecture.setExamName(TextUtils.blankToNull(request.examName()));
-        lecture.setExamGrade(TextUtils.blankToNull(request.examGrade()));
         lecture.setHomework(TextUtils.blankToNull(request.homework()));
+
+        // "بدون اختبار" is a statement about the lesson, so the exam fields are
+        // cleared rather than merely ignored: a stale name or maximum left behind
+        // would let the screens that read them directly disagree with the flag.
+        boolean hasExam = request.hasExamOrDefault();
+        lecture.setHasExam(hasExam);
+        lecture.setExamName(hasExam ? TextUtils.blankToNull(request.examName()) : null);
+        lecture.setExamGrade(hasExam ? TextUtils.blankToNull(request.examGrade()) : null);
     }
 }

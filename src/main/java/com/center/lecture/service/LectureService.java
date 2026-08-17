@@ -25,5 +25,11 @@ public interface LectureService {
 
     LectureResponse update(UUID lectureId, LectureRequest request);
 
+    /**
+     * Create or update under an id the CLIENT chose, for replaying a write made
+     * offline.
+     */
+    LectureResponse upsert(UUID lectureId, LectureRequest request);
+
     void delete(UUID lectureId);
 }

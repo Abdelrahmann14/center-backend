@@ -20,6 +20,15 @@ public class PermissionCache {
 
     private static final long TTL_MS = 60_000;
 
+    /**
+     * Above this many tracked users, expired entries are swept before adding
+     * more. Entries were previously only ever removed by an explicit evict, so
+     * every account that had ever authenticated stayed resident for the life of
+     * the process - a slow leak that grew with total users, not with concurrent
+     * ones, and therefore only showed up after a long uptime.
+     */
+    private static final int SWEEP_THRESHOLD = 5_000;
+
     private record Entry(List<GrantedAuthority> authorities, UUID adminId, long expiresAt) {}
 
     private final ConcurrentHashMap<UUID, Entry> byUser = new ConcurrentHashMap<>();
@@ -32,8 +41,21 @@ public class PermissionCache {
             return cached.authorities();
         }
         List<GrantedAuthority> fresh = List.copyOf(loader.get());
+        sweepIfCrowded(now);
         byUser.put(userId, new Entry(fresh, adminId, now + TTL_MS));
         return fresh;
+    }
+
+    /**
+     * Drops entries whose TTL has passed. Only runs once the map is already
+     * large, so the normal path stays a single hash lookup, and only on a miss -
+     * which is already the slow path that went to the database.
+     */
+    private void sweepIfCrowded(long now) {
+        if (byUser.size() < SWEEP_THRESHOLD) {
+            return;
+        }
+        byUser.values().removeIf(entry -> entry.expiresAt() <= now);
     }
 
     /** Drop one user's entry (e.g. after their permissions change). */

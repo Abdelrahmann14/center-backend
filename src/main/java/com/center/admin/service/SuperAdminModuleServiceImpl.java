@@ -26,7 +26,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class SuperAdminModuleServiceImpl implements SuperAdminModuleService {
 
-    private static final String ADMIN_NOT_FOUND = "المدير غير موجود";
+    private static final String ADMIN_NOT_FOUND = "المدرّس غير موجود";
     private static final String MODULE_NOT_FOUND = "الوحدة غير موجودة";
     private static final String NOT_PLATFORM = "هذه الوحدة غير خاضعة لتحكم المنصة";
 

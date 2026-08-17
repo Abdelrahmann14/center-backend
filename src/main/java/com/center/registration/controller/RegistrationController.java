@@ -44,7 +44,7 @@ public class RegistrationController {
     private final RegistrationService registrationService;
 
     @GetMapping
-    @PreAuthorize("hasAnyAuthority('PERM_REGISTRATION_ACCESS','PERM_ATTENDANCE_ACCESS')")
+    @PreAuthorize("hasAuthority('PERM_REGISTRATION_ACCESS')")
     @Operation(summary = "Search a lesson's registrations",
             description = "Paginated. Pass groupless=true for students registered under no group.")
     public Page<RegistrationResponse> search(
@@ -54,28 +54,28 @@ public class RegistrationController {
     }
 
     @GetMapping("/groups")
-    @PreAuthorize("hasAnyAuthority('PERM_REGISTRATION_ACCESS','PERM_ATTENDANCE_ACCESS')")
+    @PreAuthorize("hasAuthority('PERM_REGISTRATION_ACCESS')")
     @Operation(summary = "Groups that attended a lesson, with head counts")
     public List<LessonGroupResponse> lessonGroups(@RequestParam("lecture_id") UUID lectureId) {
         return registrationService.lessonGroups(lectureId);
     }
 
     @GetMapping("/stats-by-price")
-    @PreAuthorize("hasAnyAuthority('PERM_REGISTRATION_ACCESS','PERM_ATTENDANCE_ACCESS')")
+    @PreAuthorize("hasAuthority('PERM_REGISTRATION_ACCESS')")
     @Operation(summary = "A lesson's present students aggregated by price paid")
     public List<PriceBucketResponse> statsByPrice(@RequestParam("lecture_id") UUID lectureId) {
         return registrationService.statsByPrice(lectureId);
     }
 
     @GetMapping("/history/{studentId}")
-    @PreAuthorize("hasAnyAuthority('PERM_REGISTRATION_ACCESS','PERM_ATTENDANCE_ACCESS')")
+    @PreAuthorize("hasAuthority('PERM_REGISTRATION_ACCESS')")
     @Operation(summary = "Every lesson of the student's grade; unregistered ones read as absent")
     public List<LessonHistoryResponse> history(@PathVariable UUID studentId) {
         return registrationService.historyForStudent(studentId);
     }
 
     @PostMapping
-    @PreAuthorize("hasAuthority('PERM_REGISTRATION_CREATE')")
+    @PreAuthorize("hasAuthority('PERM_REGISTRATION_ACCESS')")
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "Register a student into a lesson")
     public RegistrationResponse register(@Valid @RequestBody CreateRegistrationRequest request) {
@@ -83,7 +83,7 @@ public class RegistrationController {
     }
 
     @PatchMapping("/{registrationId}/homework")
-    @PreAuthorize("hasAuthority('PERM_REGISTRATION_UPDATE')")
+    @PreAuthorize("hasAuthority('PERM_REGISTRATION_ACCESS')")
     @Operation(summary = "Set or clear the homework flag")
     public RegistrationResponse updateHomework(@PathVariable UUID registrationId,
             @Valid @RequestBody UpdateHomeworkRequest request) {
@@ -91,7 +91,7 @@ public class RegistrationController {
     }
 
     @PatchMapping("/{registrationId}/exam")
-    @PreAuthorize("hasAuthority('PERM_REGISTRATION_UPDATE')")
+    @PreAuthorize("hasAuthority('PERM_REGISTRATION_ACCESS')")
     @Operation(summary = "Set or clear the exam score (0..the lesson's maximum)")
     public RegistrationResponse updateExamScore(@PathVariable UUID registrationId,
             @Valid @RequestBody UpdateExamScoreRequest request) {
@@ -99,7 +99,7 @@ public class RegistrationController {
     }
 
     @DeleteMapping("/{registrationId}")
-    @PreAuthorize("hasAuthority('PERM_REGISTRATION_DELETE')")
+    @PreAuthorize("hasAuthority('PERM_REGISTRATION_ACCESS')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void unregister(@PathVariable UUID registrationId) {
         registrationService.unregister(registrationId);

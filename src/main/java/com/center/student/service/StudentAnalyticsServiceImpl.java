@@ -98,7 +98,7 @@ public class StudentAnalyticsServiceImpl implements StudentAnalyticsService {
             }
             timeline.add(new Entry(held.getLectureId(), held.getLectureName(),
                     toDate(held.getHeldAt()), null, null, false,
-                    null, false, null, null, null, null));
+                    null, held.getHasExam(), false, null, null, null, null));
         }
 
         timeline.sort(Comparator.comparing(Entry::date, Comparator.nullsLast(Comparator.naturalOrder())));
@@ -137,6 +137,7 @@ public class StudentAnalyticsServiceImpl implements StudentAnalyticsService {
                 groupLabel(r.getGroup()),
                 true,
                 examName,
+                r.getLecture().isHasExam(),
                 taken,
                 score,
                 max,
@@ -150,8 +151,10 @@ public class StudentAnalyticsServiceImpl implements StudentAnalyticsService {
         long examsTaken = timeline.stream().filter(Entry::examTaken).count();
         // An exam counts as missed only when the lesson had one and the student
         // has no score for it - a lesson without an exam is not a miss.
+        // The lesson now SAYS whether it had an exam, instead of this being
+        // inferred from whether someone happened to type an exam name.
         long examsMissed = timeline.stream()
-                .filter(e -> !e.examTaken() && e.examName() != null && !e.examName().isBlank())
+                .filter(e -> e.hasExam() && !e.examTaken())
                 .count();
 
         List<BigDecimal> percents = timeline.stream()

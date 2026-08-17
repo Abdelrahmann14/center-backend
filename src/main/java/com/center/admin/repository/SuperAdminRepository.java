@@ -37,6 +37,9 @@ public interface SuperAdminRepository extends JpaRepository<User, UUID> {
         boolean getActive();
 
         /** timestamptz arrives as an Instant in native-query projections. */
+        /** WhatsApp number invoices are sent to; null until it is set. */
+        String getPhone();
+
         Instant getCreatedAt();
 
         /** Username recorded by the auditing listener; null on pre-audit rows. */
@@ -63,6 +66,7 @@ public interface SuperAdminRepository extends JpaRepository<User, UUID> {
             SELECT u.id         AS id,
                    u.username   AS username,
                    u.email      AS email,
+                   u.phone      AS phone,
                    u.is_active  AS active,
                    u.created_at AS createdAt,
                    u.created_by AS createdBy,
@@ -85,6 +89,7 @@ public interface SuperAdminRepository extends JpaRepository<User, UUID> {
             SELECT u.id         AS id,
                    u.username   AS username,
                    u.email      AS email,
+                   u.phone      AS phone,
                    u.is_active  AS active,
                    u.created_at AS createdAt,
                    u.created_by AS createdBy,
@@ -136,7 +141,8 @@ public interface SuperAdminRepository extends JpaRepository<User, UUID> {
             FROM students s
             LEFT JOIN users t ON t.id = s.admin_id
             WHERE (CAST(:q AS text) IS NULL
-                   OR (:q LIKE '0%' AND array_to_string(s.student_phones, ',') ILIKE '%' || :q || '%')
+                   OR (:q LIKE '0%' AND (array_to_string(s.student_phones, ',') ILIKE '%' || :q || '%'
+                                        OR array_to_string(s.parent_phones, ',') ILIKE '%' || :q || '%'))
                    OR (:q ~ '^[1-9]' AND CAST(s.serial AS text) LIKE :q || '%')
                    OR (:q !~ '^[0-9]' AND s.name ILIKE '%' || :q || '%'))
               AND (CAST(:adminId AS uuid) IS NULL OR s.admin_id = CAST(:adminId AS uuid))
@@ -151,7 +157,8 @@ public interface SuperAdminRepository extends JpaRepository<User, UUID> {
             countQuery = """
             SELECT count(*) FROM students s
             WHERE (CAST(:q AS text) IS NULL
-                   OR (:q LIKE '0%' AND array_to_string(s.student_phones, ',') ILIKE '%' || :q || '%')
+                   OR (:q LIKE '0%' AND (array_to_string(s.student_phones, ',') ILIKE '%' || :q || '%'
+                                        OR array_to_string(s.parent_phones, ',') ILIKE '%' || :q || '%'))
                    OR (:q ~ '^[1-9]' AND CAST(s.serial AS text) LIKE :q || '%')
                    OR (:q !~ '^[0-9]' AND s.name ILIKE '%' || :q || '%'))
               AND (CAST(:adminId AS uuid) IS NULL OR s.admin_id = CAST(:adminId AS uuid))

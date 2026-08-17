@@ -36,6 +36,9 @@ public record StudentRequest(
         Religion religion,
         AcademicTrack academicTrack,
         @PositiveOrZero BigDecimal lessonPrice,
+
+        /** Required (min length enforced in the service) only when discounted. */
+        String discountReason,
         String notes,
 
         /** False = blocked. Absent means active, so older clients keep working. */

@@ -35,5 +35,18 @@ public interface RegistrationService {
     /** @param examScore null clears it; otherwise 0..the lesson's maximum */
     RegistrationResponse updateExamScore(UUID registrationId, BigDecimal examScore);
 
+    /**
+     * Replay a registration written offline, under the id the CLIENT chose.
+     *
+     * <p>Registrations carry a natural key - one row per (lesson, student) -
+     * that two devices compute identically, so a replay collapses onto the row
+     * that already owns that pair instead of racing it. That makes this the one
+     * entity here where two people registering the same student cannot conflict.
+     * Homework and exam score ride along, because sync sends whole rows and
+     * there is no offline equivalent of the two field-level PATCH endpoints.
+     */
+    RegistrationResponse upsert(UUID registrationId, CreateRegistrationRequest request,
+            BigDecimal examScore);
+
     void unregister(UUID registrationId);
 }

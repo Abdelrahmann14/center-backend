@@ -1,0 +1,56 @@
+# Fly.io deployment for the Center API. One always-on machine, built from the
+# Dockerfile in this repository.
+#
+#   fly launch --no-deploy --copy-config    # claims the app name, once
+#   fly secrets set DB_HOST=... DB_PASSWORD=... JWT_SECRET=...
+#   fly deploy
+#
+# Secrets NEVER live in this file - it is committed. `fly secrets set` stores
+# them encrypted and injects them as environment variables at boot.
+
+app = "center-api"
+
+# Close to the database, not to the users: every request makes several round
+# trips to Supabase, and the browser makes one. eu-west-1 (Ireland) is the
+# default Supabase region in .env.example - move this if the project is
+# elsewhere, and check `fly platform regions` for the list.
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Disables Swagger and stack traces in responses (application-prod.yml).
+  SPRING_PROFILES_ACTIVE = "prod"
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # This app is not a request/response service only: four @Scheduled jobs run in
+  # the background (WhatsApp delivery checks, the Google contacts reconciler and
+  # the external-effect outbox). A machine that stops when the last request ends
+  # stops running them, so scale-to-zero would silently break automation rather
+  # than save money. Keep exactly one machine up.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+# Liveness only: /api/health answers as soon as the process is up, and does NOT
+# touch the database - a database outage must not make Fly kill and restart a
+# process that is serving the offline path correctly.
+[[http_service.checks]]
+  path = "/api/health"
+  method = "GET"
+  interval = "30s"
+  timeout = "5s"
+  # Flyway migrations run at boot, so give startup room before the first check.
+  grace_period = "60s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # A JVM with an 8-connection pool, Flyway and PDF generation does not fit
+  # comfortably in 512MB; 1GB leaves headroom for a PDF batch.
+  memory = "1gb"
+  cpus = 1

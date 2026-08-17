@@ -47,6 +47,8 @@ public record StudentAnalyticsResponse(
             String groupName,
             boolean attended,
             String examName,
+            /** False = the lesson had no exam, so no score was ever expected. */
+            boolean hasExam,
             boolean examTaken,
             BigDecimal examScore,
             BigDecimal examMaxScore,

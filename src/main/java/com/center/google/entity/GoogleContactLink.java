@@ -48,4 +48,15 @@ public class GoogleContactLink {
 
     @Column(name = "etag")
     private String etag;
+
+    /**
+     * The name this system last WROTE to Google for this contact.
+     *
+     * <p>Not the name Google reports: Google rebuilds a display name from the
+     * parts it parsed, so a string it normalised comes back different from the
+     * one it was sent. Without this, every check would read that difference as
+     * "wrong name", rewrite it, and find it wrong again on the next pass.
+     */
+    @Column(name = "display_name")
+    private String displayName;
 }

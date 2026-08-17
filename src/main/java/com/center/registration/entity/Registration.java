@@ -27,7 +27,9 @@ import lombok.Setter;
 /** One student's record for one lesson. */
 @Entity
 @Table(name = "registrations",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"lecture_id", "student_id"}),
+        // (lecture, student, group): one record per student per lesson per group,
+        // so a student may attend the same lesson again under a different group.
+        uniqueConstraints = @UniqueConstraint(columnNames = {"lecture_id", "student_id", "group_id"}),
         indexes = {
                 @Index(name = "registrations_lecture_idx", columnList = "lecture_id"),
                 @Index(name = "registrations_student_idx", columnList = "student_id"),
@@ -55,6 +57,18 @@ public class Registration extends TenantEntity {
 
     @Column(nullable = false)
     private RegistrationStatus status = RegistrationStatus.PRESENT;
+
+    /**
+     * The instant the student was actually marked present, to the second.
+     *
+     * <p>Separate from {@code createdAt} on purpose. createdAt is when the ROW
+     * reached the database, which for an attendance taken offline is whenever the
+     * device next reconnected - so quoting it back as "وقت الحضور" was wrong by
+     * however long the outage lasted. The device sends the real instant with the
+     * queued registration; an online one gets it from the server clock.
+     */
+    @Column(name = "attended_at", nullable = false)
+    private java.time.OffsetDateTime attendedAt = java.time.OffsetDateTime.now();
 
     /** Null means not examined. */
     @Column(name = "exam_score")

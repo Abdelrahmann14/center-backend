@@ -27,7 +27,7 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
             AccessDeniedException ex) throws IOException {
 
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
-                HttpStatus.FORBIDDEN, "هذه العملية تتطلب صلاحية المدير");
+                HttpStatus.FORBIDDEN, "هذه العملية تتطلب صلاحية المدرّس");
 
         response.setStatus(HttpStatus.FORBIDDEN.value());
         response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);

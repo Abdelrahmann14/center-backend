@@ -54,7 +54,6 @@ import com.center.parent.repository.ParentStudentLinkRepository;
 import com.center.registration.repository.RegistrationRepository;
 import com.center.student.repository.StudentRepository;
 import com.center.user.repository.UserRepository;
-import com.center.whatsapp.service.GreenApiClient;
 import com.center.notification.service.MessageTemplateService;
 import com.center.notification.service.NotificationService;
 import com.center.exam.service.StudentExamService;
@@ -87,7 +86,6 @@ public class StudentExamServiceImpl implements StudentExamService {
     private final UserRepository userRepository;
     private final NotificationService notificationService;
     private final MessageTemplateService templateService;
-    private final GreenApiClient greenApiClient;
 
     @Override
     @Transactional(readOnly = true)
@@ -320,32 +318,30 @@ public class StudentExamServiceImpl implements StudentExamService {
     private void notifyParents(Exam exam, Student student, BigDecimal score, BigDecimal bonus) {
         String teacher = teacherName();
         String max = plain(exam.getMaxScore());
+        // The bonus is folded into the score rather than carried as its own
+        // variable. It only ever appeared immediately after the score, and a
+        // variable that is blank for almost every exam is a slot authors have to
+        // remember, get wrong, and leave a stray space behind.
         String bonusPart = bonus != null && bonus.signum() > 0 ? " (+" + plain(bonus) + " بونص)" : "";
         String title = "نتيجة اختبار";
         String body = templateService.render("exam_result", java.util.Map.of(
                 "student.name", student.getName(),
-                "exam.score", plain(score),
+                "exam.score", plain(score) + bonusPart,
                 "exam.max", max,
-                "exam.bonus", bonusPart,
                 "exam.name", exam.getName())).body();
 
+        // In-app only. A WhatsApp copy used to go out from here the moment an
+        // exam was graded; no grade leaves the building on its own any more -
+        // every WhatsApp result is sent deliberately, from the lesson roster's
+        // own button, once the teacher considers the marks final. The parent
+        // still learns the result immediately through the app.
         for (ParentStudentLink link : parentLinkRepository.findByStudentIdAndStatus(student.getId(), LinkStatus.APPROVED)) {
             Parent parent = parentRepository.findById(link.getParentId()).orElse(null);
-            if (parent == null) {
+            if (parent == null || parent.getUserId() == null) {
                 continue;
             }
-            if (parent.getUserId() != null) {
-                notificationService.notifyFrom(parent.getUserId(), TenantContext.get(), teacher,
-                        NotificationType.EXAM_GRADED, title, body, exam.getId(), null);
-            }
-            if (parent.getPhone() != null && !parent.getPhone().isBlank()) {
-                try {
-                    greenApiClient.sendText("exam_result", parent.getPhone(), body);
-                } catch (RuntimeException ex) {
-                    // A failed WhatsApp must not roll back the graded attempt.
-                    log.warn("Exam result WhatsApp to parent {} failed: {}", parent.getId(), ex.getMessage());
-                }
-            }
+            notificationService.notifyFrom(parent.getUserId(), TenantContext.get(), teacher,
+                    NotificationType.EXAM_GRADED, title, body, exam.getId(), null);
         }
     }
 

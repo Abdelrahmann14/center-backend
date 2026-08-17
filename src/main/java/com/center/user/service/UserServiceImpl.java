@@ -19,6 +19,7 @@ import com.center.common.enums.Role;
 import com.center.common.exception.BusinessRuleException;
 import com.center.common.exception.DuplicateResourceException;
 import com.center.common.exception.ResourceNotFoundException;
+import com.center.finance.repository.LessonAttendanceRepository;
 import com.center.user.mapper.UserMapper;
 import com.center.user.repository.UserPermissionRepository;
 import com.center.user.repository.UserRepository;
@@ -39,6 +40,7 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
     private final UserPermissionRepository userPermissionRepository;
+    private final LessonAttendanceRepository lessonAttendanceRepository;
     private final PasswordEncoder passwordEncoder;
     private final UserMapper userMapper;
 
@@ -54,14 +56,22 @@ public class UserServiceImpl implements UserService {
                         LinkedHashMap::new,
                         Collectors.mapping(UserPermissionRepository.GrantedNameRow::getNameAr, Collectors.toList())));
 
+        // One count query for the whole workspace, joined in memory - the table
+        // shows each assistant's attendance without a query per row.
+        Map<UUID, Long> attendance = lessonAttendanceRepository.countByUser().stream()
+                .collect(Collectors.toMap(
+                        LessonAttendanceRepository.UserAttendanceCount::getUserId,
+                        LessonAttendanceRepository.UserAttendanceCount::getCount));
+
         return userRepository.findByAdminIdOrderByCreatedAtAsc(admin).stream()
-                .map(u -> toResponse(u, granted.getOrDefault(u.getId(), List.of())))
+                .map(u -> toResponse(u, granted.getOrDefault(u.getId(), List.of()),
+                        attendance.getOrDefault(u.getId(), 0L)))
                 .toList();
     }
 
-    private static UserResponse toResponse(User user, List<String> permissions) {
+    private static UserResponse toResponse(User user, List<String> permissions, long attendanceCount) {
         return new UserResponse(user.getId(), user.getUsername(), user.getEmail(), user.getPhone(),
-                user.getRole(), user.getCreatedAt(), permissions);
+                user.getRole(), user.getCreatedAt(), permissions, attendanceCount);
     }
 
     @Override
@@ -99,7 +109,7 @@ public class UserServiceImpl implements UserService {
         user.setRole(Role.USER);
         // The new assistant belongs to the workspace that created it.
         user.setAdminId(currentAdmin());
-        return toResponse(userRepository.save(user), List.of());
+        return toResponse(userRepository.save(user), List.of(), 0L);
     }
 
     @Override
@@ -121,7 +131,7 @@ public class UserServiceImpl implements UserService {
         if (request.password() != null && !request.password().isBlank()) {
             user.setPasswordHash(passwordEncoder.encode(request.password()));
         }
-        return toResponse(userRepository.save(user), List.of());
+        return toResponse(userRepository.save(user), List.of(), 0L);
     }
 
     @Override
@@ -130,7 +140,7 @@ public class UserServiceImpl implements UserService {
         User user = findEntity(userId);
         // The admin account can never be deleted - by anyone.
         if (user.getRole() == Role.ADMIN) {
-            throw new BusinessRuleException("لا يمكن حذف حساب المدير");
+            throw new BusinessRuleException("لا يمكن حذف حساب المدرّس");
         }
         userRepository.delete(user);
     }

@@ -15,6 +15,8 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -75,6 +77,15 @@ public class AdminMessagingServiceImpl implements AdminMessagingService {
     private final UserRepository userRepository;
     private final GreenApiClient greenApiClient;
 
+    /**
+     * Routes the transactional halves of {@link #broadcast} through the proxy;
+     * a plain {@code this.} call would bypass it and put the WhatsApp fan-out
+     * back inside the transaction it was just taken out of.
+     */
+    @Autowired
+    @Lazy
+    private AdminMessagingServiceImpl self;
+
     private static UUID adminId() {
         UUID id = TenantContext.get();
         if (id == null) {
@@ -85,9 +96,46 @@ public class AdminMessagingServiceImpl implements AdminMessagingService {
 
     // ── Broadcast ─────────────────────────────────────────────────────────
 
+    /** One WhatsApp message the broadcast still owes, resolved but not yet sent. */
+    private record PendingSend(String phone, String body) {
+    }
+
+    /** What {@link #planBroadcast} produced: the record row and the sends it owes. */
+    private record Planned(UUID outgoingId, int recipients, List<PendingSend> sends) {
+    }
+
+    /**
+     * Deliberately NOT {@code @Transactional} - it used to be, and that put a
+     * WhatsApp round trip per recipient inside a single write transaction. A
+     * broadcast to a 500-parent grade therefore held one of eight pooled
+     * connections across 500 sequential calls to a third party, on a request
+     * thread, while every other request in the system queued behind it. It is
+     * also the one path in the messaging feature that the earlier split missed.
+     *
+     * <p>Now: resolve and persist in one short transaction, send with nothing
+     * held, then record the count in a second short one. The in-app
+     * notifications - the part that must not be lost - commit before the first
+     * WhatsApp call is made, which is strictly safer than before.
+     */
     @Override
-    @Transactional
     public BroadcastResult broadcast(AdminBroadcastRequest request) {
+        Planned planned = self.planBroadcast(request);
+        int whatsappSent = 0;
+        for (PendingSend send : planned.sends()) {
+            try {
+                greenApiClient.sendText("broadcast", send.phone(), send.body());
+                whatsappSent++;
+            } catch (RuntimeException e) {
+                log.warn("Admin WhatsApp broadcast to a recipient failed: {}", e.getMessage());
+            }
+        }
+        self.recordSent(planned.outgoingId(), whatsappSent);
+        return new BroadcastResult(planned.recipients(), whatsappSent);
+    }
+
+    /** Persist the record and every in-app notification; collect what to send. */
+    @Transactional
+    public Planned planBroadcast(AdminBroadcastRequest request) {
         UUID adminId = adminId();
         Set<UUID> recipients = resolveRecipients(request);
         recipients.remove(null);
@@ -119,7 +167,7 @@ public class AdminMessagingServiceImpl implements AdminMessagingService {
         outgoingMessageRepository.save(record);
         UUID outgoingId = record.getId();
 
-        int whatsappSent = 0;
+        List<PendingSend> sends = new java.util.ArrayList<>();
         for (UUID recipientId : recipients) {
             Map<String, String> vars = new HashMap<>(base);
             vars.putAll(global);
@@ -136,19 +184,20 @@ public class AdminMessagingServiceImpl implements AdminMessagingService {
             if (request.whatsapp() && mine != null) {
                 String phone = firstNonBlank(mine.get("student.phone"), mine.get("parent.phone"));
                 if (phone != null) {
-                    try {
-                        greenApiClient.sendText("broadcast", phone, stripMarkers(rendered, true));
-                        whatsappSent++;
-                    } catch (RuntimeException e) {
-                        log.warn("Admin WhatsApp broadcast to a recipient failed: {}", e.getMessage());
-                    }
+                    sends.add(new PendingSend(phone, stripMarkers(rendered, true)));
                 }
             }
         }
+        return new Planned(outgoingId, recipients.size(), sends);
+    }
 
-        record.setWhatsappSent(whatsappSent);
-        outgoingMessageRepository.save(record);
-        return new BroadcastResult(recipients.size(), whatsappSent);
+    /** Stamp the delivered count once the sending is over. */
+    @Transactional
+    public void recordSent(UUID outgoingId, int whatsappSent) {
+        outgoingMessageRepository.findById(outgoingId).ifPresent(row -> {
+            row.setWhatsappSent(whatsappSent);
+            outgoingMessageRepository.save(row);
+        });
     }
 
     /** Union of every selected facet, all scoped to the admin's own workspace. */
@@ -349,7 +398,8 @@ public class AdminMessagingServiceImpl implements AdminMessagingService {
 
         StudentFilter build() {
             return new StudentFilter(
-                    search, null, null, null, grade, groupId, gender, academicTrack, null, religion);
+                    search, null, null, null, grade, groupId, gender, academicTrack, null, religion,
+                    null);
         }
     }
 

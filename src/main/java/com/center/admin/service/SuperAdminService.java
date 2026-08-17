@@ -70,7 +70,6 @@ public interface SuperAdminService {
     AdminSummaryResponse getAdmin(UUID adminId);
 
     /** Enable or disable Google Contacts sync for one Admin (super-admin only). */
-    void setGoogleSync(UUID adminId, boolean enabled);
 
     /** Enable or disable the WhatsApp numbers feature for one Admin (super-admin only). */
     void setWhatsappSync(UUID adminId, boolean enabled);

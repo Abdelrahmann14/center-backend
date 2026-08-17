@@ -81,6 +81,10 @@ public class Student extends TenantEntity {
     @Column(name = "is_discounted", nullable = false)
     private boolean discounted;
 
+    /** Why the student pays below the center's price. Null while at full price. */
+    @Column(name = "discount_reason")
+    private String discountReason;
+
     private String notes;
 
     /** False = blocked: the record stays, but the student cannot be registered. */

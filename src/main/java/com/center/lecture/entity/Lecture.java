@@ -21,6 +21,14 @@ public class Lecture extends TenantEntity {
 
     private String grade;
 
+    /**
+     * Whether this lesson has an exam at all. Authoritative: when false the two
+     * exam fields below are forced null on save, so nothing downstream has to
+     * guess from whether one of them happens to be filled.
+     */
+    @Column(name = "has_exam", nullable = false)
+    private boolean hasExam = true;
+
     @Column(name = "exam_name")
     private String examName;
 

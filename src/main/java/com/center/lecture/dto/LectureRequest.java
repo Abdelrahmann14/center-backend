@@ -10,5 +10,15 @@ public record LectureRequest(
         String grade,
         String examName,
         String examGrade,
+
+        /**
+         * Null means "has an exam", so an older client (or an offline replay
+         * written before the field existed) keeps its previous meaning.
+         */
+        Boolean hasExam,
         String homework) {
+
+    public boolean hasExamOrDefault() {
+        return hasExam == null || hasExam;
+    }
 }

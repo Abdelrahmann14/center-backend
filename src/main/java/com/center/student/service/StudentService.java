@@ -32,5 +32,17 @@ public interface StudentService {
 
     StudentResponse update(UUID studentId, StudentRequest request);
 
+    /** Records why a discounted student pays less, without touching other fields. */
+    StudentResponse setDiscountReason(UUID studentId, String reason);
+
+    /**
+     * Create or update the student under an id the CLIENT chose, for replaying a
+     * write made offline. Same validation and the same Google Contacts event as
+     * the online paths; only the identity is supplied rather than generated, so
+     * the row the device already showed its user and the row stored here are one
+     * row and not two.
+     */
+    StudentResponse upsert(UUID studentId, StudentRequest request);
+
     void delete(UUID studentId);
 }

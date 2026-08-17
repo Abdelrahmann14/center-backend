@@ -33,51 +33,75 @@ public final class ModuleCatalog {
         return new PermissionDef(code, action, nameAr, sortOrder);
     }
 
+    /**
+     * Every module is a screen this system actually has, and every permission
+     * gates something that actually exists.
+     *
+     * <p>The {@code adminManaged} flag decides delegation, not visibility. Both
+     * kinds of module are platform-controlled screens the super admin can switch
+     * on/off per workspace; the flag says whether an admin may hand the screen's
+     * permissions to an assistant:
+     * <ul>
+     *   <li><b>adminManaged = true</b> - assistant-assignable. Its permissions
+     *       appear in the grant editor and an assistant can be given them:
+     *       STUDENTS, LESSONS, REGISTRATIONS, FINANCE, ASSISTANT_ATTENDANCE,
+     *       NOTIFICATIONS (the Messages page).</li>
+     *   <li><b>adminManaged = false</b> - admin-only. The admin still holds every
+     *       permission of the module (see {@code findAdminPermissionCodes}), so
+     *       enforcement is unchanged, but the codes never show in the editor and
+     *       an assistant can never hold them: ANALYTICS, GROUPS, ASSISTANTS,
+     *       EXAMS.</li>
+     * </ul>
+     *
+     * <p>So making a capability admin-only means parking its permission under an
+     * admin-only module. That is why STUDENT_ANALYTICS and STUDENT_REPORT_SEND both
+     * live under ANALYTICS rather than under STUDENTS: the student screen is
+     * delegatable, those two actions are not.
+     *
+     * <p>Registration and Finance each expose a single "access" permission that
+     * covers everything inside the section - an assistant is either trusted with
+     * the whole process or not, so the old per-action split (register/edit/delete,
+     * view/manage/send) is gone.
+     *
+     * <p>WhatsApp is not here because it already has its own per-admin switch
+     * ({@code whatsapp_config}); Google Contacts has no switch at all - it costs
+     * nothing to run, so nobody is gated on it.
+     */
     public static final List<ModuleDef> MODULES = List.of(
-            // Admin-managed domain modules: always available (not platform-gated).
-            new ModuleDef("STUDENTS", "الطلاب", "إدارة بيانات الطلاب", "workspace", false, true, true, 10, List.of(
+            // ── Assistant-assignable (admin-managed) ──
+            new ModuleDef("STUDENTS", "الطلاب", "إدارة بيانات الطلاب", "workspace", true, true, true, 10, List.of(
                     p("STUDENT_VIEW", "VIEW", "عرض الطلاب", 0),
                     p("STUDENT_CREATE", "CREATE", "إضافة طالب", 1),
                     p("STUDENT_UPDATE", "UPDATE", "تعديل طالب", 2),
-                    p("STUDENT_DELETE", "DELETE", "حذف طالب", 3),
-                    p("STUDENT_ANALYTICS", "VIEW", "عرض تحليلات الطالب", 4),
-                    p("STUDENT_REPORT_SEND", "SEND", "إرسال تقرير الطالب", 5))),
-            new ModuleDef("LESSONS", "الحصص", "إنشاء وإدارة الحصص", "workspace", false, true, true, 30, List.of(
+                    p("STUDENT_DELETE", "DELETE", "حذف طالب", 3))),
+            new ModuleDef("LESSONS", "الحصص", "إنشاء وإدارة الحصص", "workspace", true, true, true, 20, List.of(
                     p("LESSON_VIEW", "VIEW", "عرض الحصص", 0),
                     p("LESSON_CREATE", "CREATE", "إضافة حصة", 1),
                     p("LESSON_UPDATE", "UPDATE", "تعديل حصة", 2),
                     p("LESSON_DELETE", "DELETE", "حذف حصة", 3))),
-            new ModuleDef("REGISTRATIONS", "التسجيل والحضور", "تسجيل الطلاب في الحصص والحضور", "workspace", false, true, true, 40, List.of(
-                    p("REGISTRATION_ACCESS", "ACCESS", "صفحة تسجيل الحصة", 0),
-                    p("ATTENDANCE_ACCESS", "ACCESS", "صفحة تسجيل الحضور", 4),
-                    p("REGISTRATION_CREATE", "CREATE", "تسجيل طالب", 1),
-                    p("REGISTRATION_UPDATE", "UPDATE", "تعديل تسجيل", 2),
-                    p("REGISTRATION_DELETE", "DELETE", "حذف تسجيل", 3))),
-            new ModuleDef("EXAMS", "الاختبارات", "بناء ونشر اختبارات الحصص", "workspace", false, true, true, 70, List.of(
+            new ModuleDef("REGISTRATIONS", "تسجيل الحصة", "تسجيل حضور الطلاب في الحصص", "workspace", true, true, true, 30, List.of(
+                    p("REGISTRATION_ACCESS", "ACCESS", "الوصول إلى تسجيل الحصة", 0))),
+            new ModuleDef("FINANCE", "الحسابات", "فواتير الحصص والإيرادات والمصروفات", "workspace", true, true, true, 40, List.of(
+                    p("FINANCE_VIEW", "ACCESS", "الوصول إلى الحسابات وإدارتها", 0))),
+            new ModuleDef("ASSISTANT_ATTENDANCE", "حضور المساعدين", "تسجيل حضور المساعدين للحصص ومتابعته", "workspace", true, true, true, 45, List.of(
+                    p("ASSISTANT_ATTENDANCE", "ACCESS", "تسجيل حضور المساعدين وعرضه", 0))),
+            // The Messages page (WhatsApp). Reuses the NOTIFICATIONS code so the sync
+            // runner updates the existing row in place instead of stranding it. Now
+            // delegatable, so an admin may hand sending to an assistant.
+            new ModuleDef("NOTIFICATIONS", "الرسائل", "رسائل واتساب: إرسال يدوي، رسائل تلقائية، وسجل", "workspace", true, true, true, 46, List.of(
+                    p("NOTIFICATION_SEND", "SEND", "إرسال رسائل واتساب", 0))),
+            // ── Admin-only (not delegatable). The admin holds these; they never
+            //    appear in the assistant grant editor, and no assistant can get
+            //    them. STUDENT_ANALYTICS / STUDENT_REPORT_SEND are parked here so
+            //    the student screen stays delegatable while these actions do not. ──
+            new ModuleDef("EXAMS", "الاختبارات", "بناء ونشر اختبارات الحصص", "workspace", true, false, true, 50, List.of(
                     p("EXAM_CREATE", "CREATE", "إنشاء اختبار", 1),
                     p("EXAM_UPDATE", "UPDATE", "تعديل اختبار", 2),
                     p("EXAM_DELETE", "DELETE", "حذف اختبار", 3),
                     p("EXAM_PUBLISH", "PUBLISH", "نشر اختبار", 4))),
-            // Platform modules: gated by the super admin per admin.
-            // ANALYTICS carries no permission: the dashboard is the admin's own
-            // screen and is never delegated - same for the groups/centers,
-            // assistants and integrations screens, which have no module at all.
-            new ModuleDef("ANALYTICS", "التحليلات", "لوحة التحليلات والإحصاءات", "platform", true, false, true, 100, List.of()),
-            new ModuleDef("NOTIFICATIONS", "الإشعارات", "إرسال الإشعارات", "platform", true, true, true, 110, List.of(
-                    p("NOTIFICATION_SEND", "SEND", "إرسال إشعارات", 1))),
-            new ModuleDef("WHATSAPP", "واتساب", "تكامل واتساب والرسائل", "platform", true, false, true, 120, List.of(
-                    p("WHATSAPP_ACCESS", "ACCESS", "الوصول لواتساب", 1))),
-            new ModuleDef("MOBILE_APP", "تطبيق الجوال", "تطبيق الطلاب وأولياء الأمور", "platform", true, false, true, 130, List.of(
-                    p("MOBILE_APP_ACCESS", "ACCESS", "الوصول للتطبيق", 1))),
-            new ModuleDef("REPORTS", "التقارير", "التقارير التفصيلية", "platform", true, true, false, 140, List.of(
-                    p("REPORT_VIEW", "VIEW", "عرض التقارير", 1))),
-            new ModuleDef("PAYMENTS", "المدفوعات", "إدارة المدفوعات", "platform", true, true, false, 150, List.of(
-                    p("PAYMENT_VIEW", "VIEW", "عرض المدفوعات", 1),
-                    p("PAYMENT_MANAGE", "MANAGE", "إدارة المدفوعات", 2))),
-            new ModuleDef("WEBSITE", "الموقع الإلكتروني", "الموقع العام", "platform", true, false, false, 160, List.of(
-                    p("WEBSITE_ACCESS", "ACCESS", "الوصول للموقع", 1))),
-            new ModuleDef("AI", "مزايا الذكاء الاصطناعي", "المزايا الذكية", "platform", true, false, false, 170, List.of(
-                    p("AI_ACCESS", "ACCESS", "استخدام الذكاء الاصطناعي", 1))),
-            new ModuleDef("AUTOMATION", "الأتمتة", "مسارات العمل الآلية", "platform", true, false, false, 180, List.of(
-                    p("AUTOMATION_ACCESS", "ACCESS", "استخدام الأتمتة", 1))));
+            new ModuleDef("ANALYTICS", "الإحصائيات", "لوحة التحليلات والإحصاءات", "workspace", true, false, true, 70, List.of(
+                    p("STUDENT_ANALYTICS", "VIEW", "عرض تحليلات الطالب", 0),
+                    p("STUDENT_REPORT_SEND", "SEND", "إرسال تقرير الطالب", 1))),
+            new ModuleDef("GROUPS", "المجموعات والسناتر", "إدارة السناتر ومجموعات الطلاب ومواعيدها", "workspace", true, false, true, 80, List.of()),
+            new ModuleDef("ASSISTANTS", "المساعدون", "حسابات المساعدين والصلاحيات", "workspace", true, false, true, 90, List.of()));
 }

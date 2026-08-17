@@ -1,7 +1,8 @@
 # Build and run the Center API.
 #
-# Build context is app/server, so this image knows nothing about the web or
-# mobile apps: `docker build -t center-api app/server`.
+# Build context is this repository root: `docker build -t center-api .`
+# Nothing outside it is needed - the web, mobile and desktop apps live in their
+# own repositories and deploy separately.
 #
 # The Arabic PDF font is bundled in src/main/resources/fonts, so the runtime
 # image needs no system fonts installed.

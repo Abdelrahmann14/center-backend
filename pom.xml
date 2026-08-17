@@ -44,6 +44,18 @@
       <artifactId>spring-boot-starter-security</artifactId>
     </dependency>
 
+    <!--
+      Observability. The app previously exported nothing at all: no request
+      latency, no error rate, no connection-pool gauge, no JVM memory - so a
+      production slowdown could only be described, never located. Actuator and
+      the Micrometer registry it brings supply all of those in-process, with no
+      external system to run. The endpoints stay behind authentication.
+    -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
     <dependency>
       <groupId>io.jsonwebtoken</groupId>
       <artifactId>jjwt-api</artifactId>
@@ -108,6 +120,19 @@
       <groupId>io.github.openhtmltopdf</groupId>
       <artifactId>openhtmltopdf-rtl-support</artifactId>
       <version>${openhtmltopdf.version}</version>
+    </dependency>
+
+    <!-- Student barcode generation (Code128). core writes the matrix; javase
+         turns it into a PNG we embed in the barcode PDF. -->
+    <dependency>
+      <groupId>com.google.zxing</groupId>
+      <artifactId>core</artifactId>
+      <version>3.5.3</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.zxing</groupId>
+      <artifactId>javase</artifactId>
+      <version>3.5.3</version>
     </dependency>
 
     <dependency>

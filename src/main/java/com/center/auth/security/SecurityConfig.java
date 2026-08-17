@@ -4,6 +4,7 @@ import com.center.student.entity.Student;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -31,7 +32,9 @@ public class SecurityConfig {
             "/api/auth/login",
             // Student self-registration - students have no account yet.
             "/api/register/**",
+            // Liveness and readiness: the platform's probes carry no token.
             "/api/health",
+            "/api/health/ready",
             "/v3/api-docs/**",
             "/swagger-ui/**",
             "/swagger-ui.html"
@@ -44,6 +47,11 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http
+                // Picks up the CorsConfigurationSource bean (see CorsConfig).
+                // Registered here so preflight OPTIONS is answered BEFORE the
+                // JWT filter - a preflight carries no Authorization header, and
+                // rejecting it would break every cross-origin call.
+                .cors(Customizer.withDefaults())
                 // No cookies or sessions are used, so CSRF has nothing to protect.
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

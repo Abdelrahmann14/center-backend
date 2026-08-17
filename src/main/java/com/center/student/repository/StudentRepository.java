@@ -6,9 +6,11 @@ import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import com.center.group.entity.Group;
 import com.center.student.entity.Student;
 
 public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpecificationExecutor<Student> {
@@ -18,6 +20,18 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
 
     long countByActiveTrue();
 
+    /** How many students (active or not) are assigned to a group - the delete guard. */
+    long countByGroup_Id(UUID groupId);
+
+    /**
+     * Move every student of one group to another, in one statement. Used when a
+     * group is deleted: no student may be left group-less, so they are transferred
+     * to the chosen target first. @TenantId keeps this within the workspace.
+     */
+    @Modifying
+    @Query("UPDATE Student s SET s.group = :target WHERE s.group.id = :sourceId")
+    int reassignGroup(@Param("sourceId") UUID sourceId, @Param("target") Group target);
+
     boolean existsByNameAndIdNot(String name, UUID id);
 
     /** The student record for a claimed login account, within the current tenant. */
@@ -25,6 +39,23 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
 
     /** Active students assigned to a group - the audience of a scheduled exam. */
     List<Student> findByGroup_IdAndActiveTrue(UUID groupId);
+
+    /**
+     * Active students assigned to a group who did not attend ANY lesson within the
+     * given week - the audience of the weekly absence message. Both Student and
+     * Attendance are @TenantId, so under a bound tenant this stays scoped to the
+     * one workspace.
+     */
+    @Query("""
+            SELECT s FROM Student s
+            WHERE s.active = true AND s.group IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM Attendance a
+                WHERE a.studentId = s.id AND a.attendedOn BETWEEN :start AND :end
+              )
+            """)
+    List<Student> findWeeklyAbsentees(@Param("start") java.time.LocalDate start,
+            @Param("end") java.time.LocalDate end);
 
     // JPQL: Hibernate's @TenantId scopes these to the current workspace, so the
     // form only ever suggests this admin's own schools/cities.
@@ -35,12 +66,20 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
     List<String> findDistinctCities();
 
     /**
-     * The highest serial ever issued, across all workspaces. Serial is a single
-     * global sequence, so the "next code" preview must see past the tenant filter
-     * - hence native SQL, which @TenantId does not touch.
+     * The highest student code issued IN ONE WORKSPACE.
+     *
+     * <p>It used to read across all of them, because the code came from a single
+     * global sequence. V53 scoped codes to the workspace, so reading globally now
+     * previews a number from someone else's roster - a brand new workspace would
+     * be told its first student is number 4,823.
+     *
+     * <p>Native SQL because {@code @TenantId} does not reach a native query; the
+     * workspace is therefore passed in and filtered explicitly, matching what the
+     * assign_student_serial trigger computes on insert.
      */
-    @Query(value = "SELECT coalesce(max(serial), 0) FROM students", nativeQuery = true)
-    int findMaxSerial();
+    @Query(value = "SELECT coalesce(max(serial), 0) FROM students WHERE admin_id = :adminId",
+            nativeQuery = true)
+    int findMaxSerial(UUID adminId);
 
     /** Just enough to locate a student and the workspace that owns them. */
     interface StudentIdentity {
@@ -63,6 +102,28 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
     /** The owning workspace of a student by id, ignoring the tenant filter. */
     @Query(value = "SELECT admin_id FROM students WHERE id = :id", nativeQuery = true)
     Optional<UUID> findAdminIdById(@Param("id") UUID id);
+
+    /** A roster row reduced to what the Google reconciler actually reads. */
+    interface RosterRow {
+        UUID getId();
+
+        java.time.OffsetDateTime getUpdatedAt();
+    }
+
+    /**
+     * Every student in one workspace as (id, updatedAt) only.
+     *
+     * <p>Native and explicitly scoped, so it bypasses the {@code @TenantId}
+     * filter and can be called from the scheduler with no tenant bound. The
+     * point is what it does NOT do: the reconciler used to call
+     * {@code findAll()} and hydrate the entire roster as managed entities -
+     * every column, every association, on a ten-minute timer, per workspace -
+     * to read two fields off each one. Two columns is a fixed, small cost that
+     * does not grow with how wide the student record becomes.
+     */
+    @Query(value = "SELECT id AS id, updated_at AS updatedAt FROM students WHERE admin_id = :adminId",
+            nativeQuery = true)
+    List<RosterRow> findRoster(@Param("adminId") UUID adminId);
 
     /**
      * True when ANY workspace already holds a student with this name. Student
@@ -128,4 +189,37 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
             """, nativeQuery = true)
     List<PhoneOwner> findPhoneOwners(@Param("phones") String phones, @Param("excludeId") UUID excludeId,
             @Param("adminId") UUID adminId);
+
+    /** Who a number belongs to, and in what capacity. */
+    interface PhoneMatch {
+        UUID getId();
+
+        String getName();
+
+        Integer getSerial();
+
+        /** STUDENT when it is the student's own number, PARENT when the guardian's. */
+        String getRole();
+    }
+
+    /**
+     * The student a WhatsApp number belongs to, so a send that carried only a
+     * phone can still be logged against a person.
+     *
+     * <p>Native because the phones are {@code text[]} and this needs the array
+     * containment operator; the workspace is passed explicitly for the same
+     * reason - a native query is outside Hibernate's {@code @TenantId} scoping.
+     * A number held by both the student and the guardian resolves as STUDENT,
+     * which is the narrower, more informative answer.
+     */
+    @Query(value = """
+            SELECT id AS id, name AS name, serial AS serial,
+                   CASE WHEN :phone = ANY(student_phones) THEN 'STUDENT' ELSE 'PARENT' END AS role
+            FROM students
+            WHERE admin_id = :adminId
+              AND (:phone = ANY(student_phones) OR :phone = ANY(parent_phones))
+            ORDER BY CASE WHEN :phone = ANY(student_phones) THEN 0 ELSE 1 END
+            LIMIT 1
+            """, nativeQuery = true)
+    Optional<PhoneMatch> findByAnyPhone(@Param("adminId") UUID adminId, @Param("phone") String phone);
 }

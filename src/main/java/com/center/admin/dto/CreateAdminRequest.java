@@ -16,6 +16,13 @@ public record CreateAdminRequest(
 
         @NotBlank(message = "مطلوب") String email,
 
+        /**
+         * WhatsApp number, digits only including the country code. Optional here,
+         * but the Financials screen has nowhere to send an invoice until it is
+         * filled in.
+         */
+        @Size(max = 20) String phone,
+
         @NotBlank(message = "مطلوب")
         @Size(min = ValidationRules.PASSWORD_MIN, max = ValidationRules.PASSWORD_MAX)
         String password) {

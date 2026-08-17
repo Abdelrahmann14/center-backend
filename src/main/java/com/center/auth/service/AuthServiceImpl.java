@@ -2,6 +2,8 @@ package com.center.auth.service;
 import com.center.auth.dto.AuthenticatedUserResponse;
 import com.center.common.enums.Role;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -12,12 +14,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.center.auth.dto.LoginRequest;
 import com.center.auth.dto.LoginResponse;
+import com.center.auth.dto.SwitchTargetResponse;
 import com.center.user.entity.User;
 import com.center.user.repository.UserRepository;
 import com.center.auth.security.AuthenticatedUser;
 import com.center.auth.security.JwtService;
 import com.center.auth.service.PrincipalViewFactory;
 import com.center.common.tenant.TenantContext;
+import com.center.common.util.PhotoCodec;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +32,7 @@ import lombok.extern.slf4j.Slf4j;
 public class AuthServiceImpl implements com.center.auth.service.AuthService {
 
     private static final String BAD_CREDENTIALS = "البريد الإلكتروني أو كلمة المرور غير صحيحة";
-    private static final String BAD_ADMIN_PASSWORD = "كلمة مرور المدير غير صحيحة";
+    private static final String BAD_ADMIN_PASSWORD = "كلمة مرور المدرّس غير صحيحة";
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -99,5 +103,62 @@ public class AuthServiceImpl implements com.center.auth.service.AuthService {
         if (!matches) {
             throw new BadCredentialsException(BAD_ADMIN_PASSWORD);
         }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<SwitchTargetResponse> switchTargets(UUID callerId) {
+        User caller = userRepository.findById(callerId)
+                .orElseThrow(() -> new BadCredentialsException(BAD_CREDENTIALS));
+        UUID workspace = workspaceOf(caller);
+        // A super admin owns no workspace - only their own account is a target.
+        if (workspace == null) {
+            return List.of(toTarget(caller, callerId));
+        }
+        // Admin first (the workspace root), then their assistants, active only -
+        // a disabled account can never be switched into, so it is not offered.
+        List<SwitchTargetResponse> targets = new ArrayList<>();
+        userRepository.findById(workspace)
+                .filter(User::isActive)
+                .ifPresent(admin -> targets.add(toTarget(admin, callerId)));
+        userRepository.findByRoleAndAdminIdOrderByUsername(Role.USER, workspace).stream()
+                .filter(User::isActive)
+                .forEach(assistant -> targets.add(toTarget(assistant, callerId)));
+        return targets;
+    }
+
+    @Override
+    @Transactional
+    public LoginResponse switchAccount(UUID callerId, UUID targetUserId, String password) {
+        User caller = userRepository.findById(callerId)
+                .orElseThrow(() -> new BadCredentialsException(BAD_CREDENTIALS));
+        UUID workspace = workspaceOf(caller);
+
+        // Every guard fails with the same generic error so a probe cannot tell a
+        // wrong password from a target it is not allowed to reach.
+        User target = userRepository.findById(targetUserId)
+                // Only admin/assistant accounts back the desktop app; a student or
+                // parent is never a switch target even within the workspace.
+                .filter(candidate -> candidate.getRole() == Role.ADMIN || candidate.getRole() == Role.USER)
+                // Same workspace only: admin<->assistant and assistant<->sibling.
+                .filter(candidate -> workspace != null && workspace.equals(workspaceOf(candidate)))
+                .filter(this::loginAllowed)
+                .filter(candidate -> passwordEncoder.matches(password, candidate.getPasswordHash()))
+                .orElseThrow(() -> new BadCredentialsException(BAD_CREDENTIALS));
+
+        String token = jwtService.issue(AuthenticatedUser.from(target));
+        log.info("User {} switched to {} (workspace {})", caller.getUsername(), target.getUsername(), workspace);
+        return new LoginResponse(token, principalViewFactory.of(target));
+    }
+
+    /** The workspace a user acts within: an admin is its root, others point at it. */
+    private static UUID workspaceOf(User user) {
+        return user.getRole() == Role.ADMIN ? user.getId() : user.getAdminId();
+    }
+
+    private static SwitchTargetResponse toTarget(User user, UUID callerId) {
+        return new SwitchTargetResponse(
+                user.getId(), user.getUsername(), user.getRole(), user.getId().equals(callerId),
+                PhotoCodec.toDataUrl(user.getPhotoData(), user.getPhotoType()));
     }
 }

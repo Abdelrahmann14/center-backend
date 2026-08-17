@@ -56,7 +56,7 @@ public class MessageTemplateServiceImpl implements MessageTemplateService {
             Map.entry("parent_link_rejected", new String[] {"تم رفض الطلب",
                     "تعذّر ربط حسابك بالطالب ({name})."}),
             Map.entry("exam_result", new String[] {null,
-                    "حصل {student.name} على {exam.score} من {exam.max}{exam.bonus} "
+                    "حصل {student.name} على {exam.score} من {exam.max} "
                             + "في اختبار \"{exam.name}\"."}));
 
     @Override

@@ -9,6 +9,10 @@ import com.center.student.entity.Student;
 import com.center.common.enums.AcademicTrack;
 import com.center.common.enums.Gender;
 import com.center.common.enums.Religion;
+import com.center.whatsapp.entity.WhatsappNumber;
+
+import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 
 /** Composable filters for the paginated student list. */
 public final class StudentSpecifications {
@@ -27,7 +31,38 @@ public final class StudentSpecifications {
                 gender(filter.gender()),
                 academicTrack(filter.academicTrack()),
                 active(filter.active()),
-                religion(filter.religion()));
+                religion(filter.religion()),
+                whatsappMissing(filter.whatsappMissing()));
+    }
+
+    /**
+     * Students holding a phone this workspace has already established is NOT on
+     * WhatsApp. A number still waiting on an answer is unanswered, not missing,
+     * and {@code isFalse} keeps it out.
+     *
+     * <p>Matched with {@code locate} against the flattened phone arrays - the
+     * same trick the search filters use, because the phones are a {@code text[]}
+     * and Criteria has no array operator. The subquery needs no tenant clause:
+     * {@link WhatsappNumber} is a {@code @TenantId} entity, so Hibernate scopes
+     * it to the current workspace by itself.
+     */
+    private static Specification<Student> whatsappMissing(Boolean missing) {
+        if (missing == null || !missing) {
+            return null;
+        }
+        return (root, query, cb) -> {
+            Subquery<UUID> sub = query.subquery(UUID.class);
+            Root<WhatsappNumber> number = sub.from(WhatsappNumber.class);
+            sub.select(number.get("id"));
+            sub.where(cb.and(
+                    cb.isFalse(number.get("hasWhatsapp")),
+                    cb.or(
+                            cb.gt(cb.locate(phonesAsText(root.get("parentPhones"), cb),
+                                    number.get("phone")), 0),
+                            cb.gt(cb.locate(phonesAsText(root.get("studentPhones"), cb),
+                                    number.get("phone")), 0))));
+            return cb.exists(sub);
+        };
     }
 
     private static Specification<Student> religion(Religion religion) {
@@ -72,27 +107,45 @@ public final class StudentSpecifications {
     }
 
     /**
-     * Matches name, school, city, any phone number, or the serial as a prefix.
-     * A null/blank term widens rather than excludes.
+     * The one student-search rule the whole system uses, decided by the first
+     * character typed:
+     *
+     * <ul>
+     *   <li>starts with {@code 0} - a phone number. Matches the student's numbers
+     *       and the guardian's, anywhere in the number.</li>
+     *   <li>starts with any other digit - the student CODE, matched as a prefix,
+     *       which is what a barcode scan produces.</li>
+     *   <li>anything else - a name, school or residential area, matched
+     *       anywhere.</li>
+     * </ul>
+     *
+     * <p>Splitting on the leading zero is what makes the box unambiguous: every
+     * Egyptian mobile begins with one and no student code does, so a digit string
+     * can only be one of the two, and typing "12" narrows to codes instead of
+     * dredging up every number containing 12. The mirror the browser searches
+     * offline applies the same three rules, so the same text finds the same
+     * students whether the line is up or not.
+     *
+     * <p>A null/blank term widens rather than excludes.
      */
     private static Specification<Student> search(String term) {
         if (term == null || term.isBlank()) {
             return null;
         }
         String cleaned = term.strip().toLowerCase();
+
+        if (cleaned.startsWith("0")) {
+            return phone(cleaned);
+        }
+        if (Character.isDigit(cleaned.charAt(0))) {
+            return serialPrefix(cleaned);
+        }
+
         String contains = "%" + cleaned + "%";
-        // The serial (student code) is matched as a prefix, mirroring the old
-        // client search where typing a code narrowed by leading digits.
-        String serialPrefix = cleaned + "%";
         return (root, query, cb) -> cb.or(
                 cb.like(cb.lower(root.get("name")), contains),
                 cb.like(cb.lower(root.get("school")), contains),
-                cb.like(cb.lower(root.get("city")), contains),
-                cb.like(cb.concat(root.get("serial").as(String.class), ""), serialPrefix),
-                // The phones are text[]; flatten each array to a string so a
-                // partial number matches any entry in it.
-                cb.like(phonesAsText(root.get("studentPhones"), cb), contains),
-                cb.like(phonesAsText(root.get("parentPhones"), cb), contains));
+                cb.like(cb.lower(root.get("city")), contains));
     }
 
     private static jakarta.persistence.criteria.Expression<String> phonesAsText(

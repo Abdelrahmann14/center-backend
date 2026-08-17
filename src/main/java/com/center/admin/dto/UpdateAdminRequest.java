@@ -15,6 +15,9 @@ public record UpdateAdminRequest(
 
         @NotBlank(message = "مطلوب") String email,
 
+        /** WhatsApp number, digits only including the country code. */
+        @Size(max = 20) String phone,
+
         @Size(min = ValidationRules.PASSWORD_MIN, max = ValidationRules.PASSWORD_MAX)
         String password) {
 }

@@ -1,0 +1,13 @@
+-- Seed the change feed with every student that already exists.
+--
+-- V27 added the students trigger but never backfilled, so only students touched
+-- SINCE that migration ever produced a feed row. A client syncing from cursor 0
+-- therefore received a partial roster - which was survivable while the mirror
+-- only fed an attendance screen, and is not now that the students page reads
+-- from it: the missing students would simply not exist as far as the app is
+-- concerned.
+--
+-- A no-op update fires the AFTER UPDATE trigger once per row without changing
+-- any value, the same technique V28 used to seed groups. Students that already
+-- have a feed row just get a newer one, which resolves to the same student.
+update students set updated_at = updated_at;

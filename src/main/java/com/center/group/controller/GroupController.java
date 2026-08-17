@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -65,7 +66,9 @@ public class GroupController {
     @DeleteMapping("/{groupId}")
     @PreAuthorize("hasRole('ADMIN')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@PathVariable UUID groupId) {
-        groupService.delete(groupId);
+    @Operation(summary = "Soft-delete a group, transferring its students to another group")
+    public void delete(@PathVariable UUID groupId,
+            @RequestParam(name = "transfer_to_group_id", required = false) UUID transferToGroupId) {
+        groupService.delete(groupId, transferToGroupId);
     }
 }

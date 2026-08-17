@@ -178,12 +178,6 @@ public class SuperAdminController {
         return superAdminService.getAdmin(adminId);
     }
 
-    @PutMapping("/admins/{adminId}/google-sync")
-    @Operation(summary = "Enable or disable Google Contacts sync for one Admin")
-    public void setGoogleSync(@PathVariable UUID adminId, @Valid @RequestBody ModuleToggleRequest request) {
-        superAdminService.setGoogleSync(adminId, request.enabled());
-    }
-
     @PutMapping("/admins/{adminId}/whatsapp-sync")
     @Operation(summary = "Enable or disable the WhatsApp feature for one Admin")
     public void setWhatsappSync(@PathVariable UUID adminId, @Valid @RequestBody ModuleToggleRequest request) {
@@ -334,7 +328,7 @@ public class SuperAdminController {
     @Operation(summary = "The {placeholder} variables available to the composer")
     public List<VariableResponse> variables() {
         return VariableCatalog.ALL.stream()
-                .map(v -> new VariableResponse(v.key(), v.description(), v.group(), v.example()))
+                .map(v -> new VariableResponse(v.key(), v.label(), v.description(), v.group(), v.example()))
                 .toList();
     }
 }

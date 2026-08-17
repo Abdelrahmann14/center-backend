@@ -13,12 +13,14 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.center.google.dto.GoogleConnectRequest;
 import com.center.google.dto.GoogleMarkRequest;
 import com.center.google.dto.GoogleMarkResponse;
+import com.center.google.dto.GoogleResyncBatch;
 import com.center.google.dto.GoogleResyncResult;
 import com.center.google.dto.GoogleStatusResponse;
 import com.center.google.service.GoogleContactService;
@@ -68,6 +70,14 @@ public class GoogleContactController {
     @Operation(summary = "Force a full re-sync of all students now")
     public GoogleResyncResult resync() {
         return service.resyncAll();
+    }
+
+    @PostMapping("/resync/batch")
+    @Operation(summary = "Sync one slice of the roster and report how much is left")
+    public GoogleResyncBatch resyncBatch(
+            @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(defaultValue = "25") int limit) {
+        return service.resyncBatch(offset, limit);
     }
 
     @GetMapping("/marks")

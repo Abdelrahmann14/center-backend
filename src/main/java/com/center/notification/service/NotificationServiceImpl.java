@@ -7,6 +7,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,6 +24,24 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class NotificationServiceImpl implements NotificationService {
+
+    /**
+     * Most recent entries one inbox read returns.
+     *
+     * <p>The query was unbounded, and {@code notifications} is append-only: every
+     * broadcast, every exam publish and every system event adds a row per
+     * recipient and nothing ever removes them. Worse, each row in the response
+     * repeats the sender's profile photo as a base64 data URL, so a year of one
+     * teacher's broadcasts serialised the same ~50 KB image several hundred
+     * times - tens of megabytes built in heap for a bell menu that shows a
+     * preview list.
+     *
+     * <p>Two hundred newest is far more than the UI ever displays and turns an
+     * inbox read into a fixed cost regardless of account age. Older entries stay
+     * in the table; they are simply not shipped. A real archive view would need
+     * a paged endpoint, which is a product decision, not a load fix.
+     */
+    private static final int INBOX_LIMIT = 200;
 
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
@@ -65,7 +84,8 @@ public class NotificationServiceImpl implements NotificationService {
     @Override
     @Transactional(readOnly = true)
     public List<NotificationResponse> list(UUID userId) {
-        List<Notification> rows = notificationRepository.findByRecipientUserIdOrderByCreatedAtDesc(userId);
+        List<Notification> rows = notificationRepository
+                .findByRecipientUserIdOrderByCreatedAtDesc(userId, Limit.of(INBOX_LIMIT));
 
         // Resolve each distinct sender's photo once (an inbox is usually all from
         // the same teacher), so the list costs one extra query at most.

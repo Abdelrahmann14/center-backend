@@ -17,5 +17,7 @@ public record UserResponse(
         Role role,
         OffsetDateTime createdAt,
         /** Arabic names of the permissions granted to this assistant. */
-        List<String> permissions) {
+        List<String> permissions,
+        /** How many lesson sessions this assistant has been marked present at. */
+        long attendanceCount) {
 }

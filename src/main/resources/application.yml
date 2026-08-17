@@ -3,6 +3,16 @@ server:
   # the local default the desktop shell also falls back to.
   port: ${PORT:8001}
 
+  compression:
+    # The API answers in list pages of up to 2000 rows, and a student row carries
+    # a name, phone arrays and school text - one page is hundreds of kilobytes of
+    # JSON that compresses to roughly a tenth of that. A few milliseconds of CPU
+    # per response buys back far more than that on the wire.
+    enabled: true
+    mime-types: application/json,application/problem+json,text/html,text/css,application/javascript
+    # Below this the gzip header costs more than the saving.
+    min-response-size: 1024
+
 spring:
   application:
     name: center-server
@@ -23,7 +33,38 @@ spring:
     username: ${DB_USER:postgres}
     password: ${DB_PASSWORD:}
     hikari:
-      maximum-pool-size: 5
+      # Raised from 5. The background jobs (WhatsApp monitor, WhatsApp recheck,
+      # Google reconcile) now run alongside requests, and the Google one holds a
+      # connection across slow calls out to Google. At 5, one reconcile pass
+      # starved sign-in until it timed out after 30s.
+      maximum-pool-size: 8
+      # Hikari defaults minimumIdle to maximumPoolSize, which makes this a FIXED
+      # pool: it opens every connection at boot and never releases an idle one.
+      # Supabase's Session Pooler caps how many clients a project may hold, so a
+      # burst of ten at startup - on top of anything the previous run leaked by
+      # being killed rather than stopped - goes over that cap, and the pooler
+      # answers by accepting the socket and closing it immediately. That is the
+      # "This connection has been closed" thrown from PoolBase.setupConnection
+      # before the app has finished booting.
+      #
+      # Two at boot, growing only under real load, stays well clear of it. It is
+      # also what gives idle-timeout below any meaning: a fixed pool has no idle
+      # connections to time out, which is why Hikari was warning about it.
+      minimum-idle: 2
+      # Supabase's pooler drops idle connections long before Hikari's 30-minute
+      # default would retire them, so the pool kept handing out sockets the
+      # server had already closed ("This connection has been closed"). Retire
+      # them early, and keep the survivors warm.
+      max-lifetime: 900000
+      keepalive-time: 300000
+      idle-timeout: 300000
+      # Hikari's default is 30 SECONDS. When the machine loses its internet the
+      # hosted database becomes unreachable, and every request then sat here for
+      # a full 30s before failing - the browser froze on each screen in turn, and
+      # the offline mirror (which could have answered instantly) was never
+      # reached. Failing in 8s turns a dead database into a fast 503, which the
+      # client treats as "offline" and serves locally.
+      connection-timeout: 8000
       data-source-properties:
         # Supabase's pooler does not support server-side prepared statements.
         prepareThreshold: 0
@@ -40,6 +81,32 @@ spring:
           batch_size: 50
         order_inserts: true
         order_updates: true
+
+  task:
+    scheduling:
+      # Four jobs are declared (@Scheduled) and the default pool is ONE thread,
+      # so they ran strictly one after another: a slow Google reconcile pass
+      # delayed the outbox drain, and a hung external call stopped all four
+      # indefinitely. One thread each removes the coupling. Timeouts (app.http
+      # below) are what bound the hang itself; this bounds the blast radius.
+      pool:
+        size: ${SCHEDULER_POOL_SIZE:4}
+    execution:
+      # @Async work (push fan-out, Google contact sync). Boot's default queue is
+      # UNBOUNDED, so a stalled external service silently accumulates tasks -
+      # and therefore heap - with no back pressure and no error. A bounded queue
+      # plus CallerRunsPolicy makes the producer feel the stall instead.
+      pool:
+        core-size: ${ASYNC_CORE_SIZE:4}
+        max-size: ${ASYNC_MAX_SIZE:8}
+        queue-capacity: ${ASYNC_QUEUE_CAPACITY:500}
+
+  servlet:
+    multipart:
+      # Explicit rather than inherited, so an upload limit is a decision on the
+      # record instead of a framework default nobody chose.
+      max-file-size: 10MB
+      max-request-size: 12MB
 
   jackson:
     # The whole API contract is snake_case (student_phones, is_active, ...) and
@@ -65,6 +132,27 @@ spring:
     baseline-description: "adopted from python run_migrations"
 
 app:
+  cors:
+    # Browser origins allowed to call this API cross-origin (see CorsConfig).
+    # Empty - the default - is same-origin only, which is how the Vite dev
+    # proxy, the desktop shell and any reverse-proxied deployment all run.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
+  http:
+    # Deadlines for every outbound call (see OutboundHttpConfig). Without them
+    # RestClient waits forever, which is how one unresponsive third party used to
+    # take request threads, Hikari connections and the scheduler with it.
+    connect-timeout-ms: ${HTTP_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${HTTP_READ_TIMEOUT_MS:20000}
+    # A model completion is slow by nature; a 20s cap would fail every call.
+    ai-read-timeout-ms: ${HTTP_AI_READ_TIMEOUT_MS:45000}
+
+  limits:
+    # Largest JSON body the API accepts. Sync pushes a batch of queued offline
+    # writes, so this cannot be small - but unbounded means one client can ask
+    # the server to buffer arbitrary bytes into heap before any handler runs.
+    max-request-bytes: ${MAX_REQUEST_BYTES:5242880}
+
   jwt:
     secret: ${JWT_SECRET}
     # Sessions last until the user explicitly logs out — the clients persist the
@@ -86,6 +174,14 @@ app:
     client-secret: ${GOOGLE_CLIENT_SECRET:}
     redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:5174/}
 
+  ai:
+    # AI message-variant generation via an OpenAI-compatible API (Groq). The API
+    # key is a secret and lives in .env; blank turns the feature off.
+    base-url: ${AI_BASE_URL:https://api.groq.com/openai/v1}
+    api-key: ${GROQ_API_KEY:}
+    model: ${AI_MODEL:llama-3.3-70b-versatile}
+    enabled: ${AI_ENABLED:true}
+
   registration:
     # Verification code lifetime and abuse limits.
     code-ttl-minutes: 5
@@ -104,6 +200,28 @@ app:
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Only what is actually read. `metrics` carries http.server.requests
+        # (count + latency + status), hikaricp.connections.* (pool usage and
+        # threads waiting), jvm.memory.*, and process.cpu.usage - the four
+        # things needed to tell "the app is slow" apart from "the database is
+        # slow" from "we ran out of connections".
+        include: health,info,metrics
+  endpoint:
+    health:
+      # Component detail (db, diskSpace, ping) only for an authenticated caller;
+      # these endpoints sit behind the same auth as the rest of the API.
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: center-server
+  observations:
+    key-values:
+      application: center-server
 
 logging:
   level:

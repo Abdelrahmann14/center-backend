@@ -19,6 +19,7 @@ public record ApplicationProperties(
         @NotNull @Valid Jwt jwt,
         @NotNull @Valid GreenApi greenApi,
         @NotNull @Valid Google google,
+        @NotNull @Valid Ai ai,
         @NotNull @Valid Registration registration,
         @NotNull @Valid Security security) {
 
@@ -56,6 +57,23 @@ public record ApplicationProperties(
         public boolean configured() {
             return clientId != null && !clientId.isBlank()
                     && clientSecret != null && !clientSecret.isBlank();
+        }
+    }
+
+    /**
+     * AI text generation for message variants, via an OpenAI-compatible API
+     * (Groq by default). The key is a secret and lives in .env. Blank = feature
+     * off, in which case variant generation reports it is not configured.
+     */
+    public record Ai(
+            @NotNull String baseUrl,
+            String apiKey,
+            @NotNull String model,
+            boolean enabled) {
+
+        /** True only when a real generation call can actually be attempted. */
+        public boolean configured() {
+            return enabled && apiKey != null && !apiKey.isBlank();
         }
     }
 

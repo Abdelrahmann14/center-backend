@@ -24,5 +24,11 @@ public record StudentFilter(
         Gender gender,
         AcademicTrack academicTrack,
         Boolean active,
-        Religion religion) {
+        Religion religion,
+        /**
+         * True keeps only students carrying a phone that is KNOWN not to be on
+         * WhatsApp. A number nobody has managed to check yet is unanswered, not
+         * missing, so it stays out of this list.
+         */
+        Boolean whatsappMissing) {
 }

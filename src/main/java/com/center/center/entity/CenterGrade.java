@@ -54,8 +54,13 @@ public class CenterGrade {
     @Column(nullable = false)
     private BigDecimal price = BigDecimal.ZERO;
 
-    public CenterGrade(UUID centerId, String grade, BigDecimal price) {
+    /** The share of this grade's takings the center keeps here, 0-100. */
+    @Column(nullable = false)
+    private BigDecimal percentage = BigDecimal.ZERO;
+
+    public CenterGrade(UUID centerId, String grade, BigDecimal price, BigDecimal percentage) {
         this.id = new Key(centerId, grade);
         this.price = price;
+        this.percentage = percentage == null ? BigDecimal.ZERO : percentage;
     }
 }

@@ -26,8 +26,9 @@ public interface RegistrationMapper {
     @Mapping(target = "studentPhones", source = "student.studentPhones")
     @Mapping(target = "parentPhones", source = "student.parentPhones")
     @Mapping(target = "isActive", source = "student.active")
-    // When the row was written IS when the student was marked present.
-    @Mapping(target = "attendedAt", source = "createdAt")
+    // attendedAt maps by name from the entity's own column - the instant the
+    // student was marked present, which for an offline attendance is NOT
+    // createdAt (that is when the queued row finally reached the database).
     @Mapping(target = "assignedGroupId", source = "student.group.id")
     @Mapping(target = "registeredGroupId", source = "group.id")
     RegistrationResponse toResponse(Registration registration);

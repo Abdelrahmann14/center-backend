@@ -29,10 +29,11 @@ public class GoogleOAuthClient {
     private static final String SCOPE = "openid email https://www.googleapis.com/auth/contacts";
 
     private final ApplicationProperties.Google config;
-    private final RestClient rest = RestClient.create();
+    private final RestClient rest;
 
-    public GoogleOAuthClient(ApplicationProperties properties) {
+    public GoogleOAuthClient(ApplicationProperties properties, RestClient rest) {
         this.config = properties.google();
+        this.rest = rest;
     }
 
     public boolean configured() {

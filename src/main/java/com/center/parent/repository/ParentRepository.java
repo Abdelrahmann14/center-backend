@@ -18,6 +18,9 @@ public interface ParentRepository extends JpaRepository<Parent, UUID> {
     /** A parent by their Parent Code - the key for the parent forgot-password flow. */
     Optional<Parent> findBySerial(Integer serial);
 
+    /** A parent account by its own number - used to name a WhatsApp recipient. */
+    Optional<Parent> findFirstByPhone(String phone);
+
     /**
      * Parents approved-linked to at least one student in the given admin's
      * workspace, matching a name/phone query. Parent is not tenant-scoped, so the

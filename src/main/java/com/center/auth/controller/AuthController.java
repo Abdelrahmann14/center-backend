@@ -1,12 +1,11 @@
 package com.center.auth.controller;
 
+import java.util.List;
 import java.util.Map;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import org.springframework.security.authentication.BadCredentialsException;
@@ -17,6 +16,8 @@ import com.center.auth.dto.LoginRequest;
 import com.center.admin.dto.VerifyAdminRequest;
 import com.center.auth.dto.AuthenticatedUserResponse;
 import com.center.auth.dto.LoginResponse;
+import com.center.auth.dto.SwitchAccountRequest;
+import com.center.auth.dto.SwitchTargetResponse;
 import com.center.auth.security.AuthenticatedUser;
 import com.center.auth.security.LoginRateLimiter;
 import com.center.auth.service.AuthService;
@@ -78,6 +79,33 @@ public class AuthController {
             authService.verifyAdminPassword(request.password());
             rateLimiter.recordSuccess(identity, ip);
             return Map.of("ok", true);
+        } catch (BadCredentialsException ex) {
+            rateLimiter.recordFailure(identity, ip);
+            throw ex;
+        }
+    }
+
+    @GetMapping("/switch-targets")
+    @Operation(summary = "Accounts the signed-in user may switch into (same workspace)")
+    public List<SwitchTargetResponse> switchTargets(@AuthenticationPrincipal AuthenticatedUser principal) {
+        return authService.switchTargets(principal.getId());
+    }
+
+    /** Password-gated like login, so it is rate-limited the same way. */
+    @PostMapping("/switch-account")
+    @Operation(summary = "Switch to another workspace account by confirming its password")
+    public LoginResponse switchAccount(
+            @Valid @RequestBody SwitchAccountRequest request,
+            @AuthenticationPrincipal AuthenticatedUser principal,
+            HttpServletRequest http) {
+        String ip = rateLimiter.clientIp(http);
+        String identity = "switch:" + principal.getId();
+        rateLimiter.checkAllowed(identity, ip);
+        try {
+            LoginResponse response =
+                    authService.switchAccount(principal.getId(), request.targetUserId(), request.password());
+            rateLimiter.recordSuccess(identity, ip);
+            return response;
         } catch (BadCredentialsException ex) {
             rateLimiter.recordFailure(identity, ip);
             throw ex;

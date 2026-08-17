@@ -41,6 +41,14 @@ public class Group extends TenantEntity {
     private boolean active = true;
 
     /**
+     * Soft delete: the row is kept so past registrations/attendance still resolve
+     * this group's label, but a deleted group is hidden from every active picker
+     * and from the groups management list.
+     */
+    @Column(nullable = false)
+    private boolean deleted;
+
+    /**
      * Derived, read-only columns. Each is computed in the same select as the
      * row, so listing groups stays one query instead of three per card.
      */
@@ -62,4 +70,12 @@ public class Group extends TenantEntity {
               where c.name = center_name and cg.grade = grade and c.admin_id = admin_id)
             """)
     private BigDecimal lessonPrice;
+
+    /** The center's share of this group's takings, 0-100. Same join as the price. */
+    @Formula("""
+            (select cg.percentage from center_grades cg
+               join centers c on c.id = cg.center_id
+              where c.name = center_name and cg.grade = grade and c.admin_id = admin_id)
+            """)
+    private BigDecimal centerPercentage;
 }

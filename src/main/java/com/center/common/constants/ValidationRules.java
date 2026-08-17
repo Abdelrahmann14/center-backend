@@ -8,6 +8,24 @@ public final class ValidationRules {
     public static final int PASSWORD_MAX = 128;
 
     public static final int STUDENT_NAME_MAX = 120;
+
+    /**
+     * The fewest space-separated parts a student's name may be saved with. Two
+     * is deliberate: plenty of records legitimately arrive as "أحمد محمد", and
+     * refusing them only pushed people into typing a filler word.
+     */
+    public static final int STUDENT_NAME_MIN_PARTS = 2;
+
+    /**
+     * The complete form of an Egyptian name. Anything short of this saves fine
+     * but leaves the record flagged as incomplete, so it can be chased later
+     * rather than blocking whoever is entering it now.
+     */
+    public static final int STUDENT_NAME_FULL_PARTS = 4;
+
+    /** A discounted student must record why, in at least this many characters. */
+    public static final int DISCOUNT_REASON_MIN = 10;
+
     public static final int GRADE_NAME_MAX = 80;
     public static final int CENTER_NAME_MAX = 120;
     public static final int LECTURE_NAME_MAX = 160;

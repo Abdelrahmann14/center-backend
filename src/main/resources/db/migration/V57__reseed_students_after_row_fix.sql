@@ -1,0 +1,13 @@
+-- Re-seed the students feed after fixing the shape of the pulled row.
+--
+-- V54 seeded every student, but the resolver at the time emitted is_active only
+-- under its old alias `active`, and omitted is_discounted / registered /
+-- google_synced entirely. Clients therefore mirrored rows in which is_active was
+-- undefined - which reads as false - so every student rendered as BLOCKED, with
+-- no app account and no Google contact.
+--
+-- Fixing the resolver is not enough on its own: pull only sends rows past the
+-- client's cursor, so the rows already mirrored would keep their wrong values
+-- until each student happened to be edited. This pushes every student through
+-- the feed once more so the corrected row replaces the bad one.
+update students set updated_at = updated_at;

@@ -18,4 +18,6 @@ public interface GoogleContactLinkRepository extends JpaRepository<GoogleContact
     /** Distinct student ids that have at least one synced Google contact, for one admin. */
     @Query("select distinct l.subjectId from GoogleContactLink l where l.adminId = :adminId")
     List<UUID> findSyncedSubjectIds(UUID adminId);
+
+    List<GoogleContactLink> findByAdminId(UUID adminId);
 }
