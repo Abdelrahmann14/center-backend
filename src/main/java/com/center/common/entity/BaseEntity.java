@@ -55,9 +55,22 @@ public abstract class BaseEntity {
     @Column(name = "updated_by")
     private String updatedBy;
 
+    // Boxed, NOT primitive - this is what makes an assigned-id insert work.
+    //
+    // Spring Data's save() has to decide insert vs update. With a PRIMITIVE
+    // @Version it cannot use the version (a primitive is never null), so it falls
+    // back to the id: id present => "not new" => merge => UPDATE. That is right
+    // for a generated id (null until persist) but wrong for the offline path,
+    // which assigns the client's id BEFORE saving a brand-new row - the UPDATE
+    // then hits no row and Hibernate throws StaleObjectStateException, so every
+    // offline-created student/lesson/group was refused on sync.
+    //
+    // A nullable Long is null on a new instance and set once loaded, so save()
+    // reads new-ness from the version and inserts the new row correctly. The
+    // column stays NOT NULL: Hibernate seeds the version to 0 on insert.
     @Version
     @Column(nullable = false)
-    private long version;
+    private Long version;
 
     /**
      * Identity is the primary key. Unsaved entities (null id) are only ever
