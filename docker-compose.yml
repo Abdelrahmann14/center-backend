@@ -1,0 +1,69 @@
+# Running the API on a plain VPS (Hetzner, Oracle, any Linux box).
+#
+#   docker compose up -d --build
+#
+# Two containers: the API, and Caddy in front of it holding the TLS certificate.
+# Only Caddy publishes ports - the API is reachable on the private compose
+# network and nowhere else, so nothing on the internet can skip TLS by asking
+# for port 8001 directly.
+#
+# Secrets come from .env in this directory (gitignored, chmod 600). The same
+# file the app reads locally works here unchanged.
+
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Fixed here rather than in .env: these two are properties of running
+      # under compose, not of this particular server.
+      PORT: 8001
+      SPRING_PROFILES_ACTIVE: prod
+    expose:
+      - "8001"
+    healthcheck:
+      # The JRE image ships no curl, so ask bash to open the socket. This is a
+      # LIVENESS check - is the process accepting connections - and must not
+      # touch the database: a Supabase outage would otherwise have Docker kill
+      # a process that is still serving its offline callers correctly.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8001"]
+      interval: 30s
+      timeout: 5s
+      # Flyway migrations run at boot; do not start judging until they are done.
+      start_period: 90s
+      retries: 3
+    logging:
+      # Without a cap, container logs grow until the disk is full.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # The hostname the certificate is issued for. Set it in .env:
+      #   API_DOMAIN=api.example.com
+      API_DOMAIN: ${API_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates live here. Losing this volume means re-issuing them, and
+      # Let's Encrypt rate-limits that - keep it.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  caddy_data:
+  caddy_config:

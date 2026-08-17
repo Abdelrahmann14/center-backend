@@ -1,0 +1,35 @@
+# TLS terminator in front of the API.
+#
+# HTTPS is not optional here: the frontend is served over HTTPS from Vercel, and
+# a browser refuses to let an HTTPS page call a plain HTTP API. A backend on
+# http:// is a backend the deployed app cannot talk to at all.
+#
+# Caddy obtains and renews the certificate by itself. The only requirement is
+# that API_DOMAIN already resolves to this server (an A record) and that ports
+# 80 and 443 are reachable - the ACME challenge arrives on 80.
+
+{$API_DOMAIN} {
+	# Caddy sets X-Forwarded-For, which is what LoginRateLimiter reads to tell
+	# callers apart - without it every login attempt would look like it came
+	# from Caddy and one attacker would lock out the whole world. That header is
+	# only trustworthy because the api container publishes no ports: nothing can
+	# reach it except through here.
+	reverse_proxy api:8001
+
+	header {
+		# Tell browsers to refuse plain HTTP to this host from now on.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		# The API answers JSON and PDFs; nothing here is meant to be framed.
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# Responses are already gzipped by Spring (server.compression), so there is
+	# nothing here for Caddy to compress again.
+
+	log {
+		output stdout
+		format console
+	}
+}
