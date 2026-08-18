@@ -35,28 +35,34 @@ import lombok.Setter;
 @Setter
 public abstract class BaseEntity implements Persistable<UUID> {
 
-    // Assigned-or-generate rather than plain @GeneratedValue: an offline client
-    // creates the row and its UUID together, and that id has to survive the sync
-    // or the row comes back down the feed as a second, indistinguishable copy.
-    // Callers that do not set an id (all of them, today) are unaffected.
+    // A plainly ASSIGNED id, defaulted to a fresh UUID - deliberately NOT a
+    // Hibernate generator (@GeneratedValue or the old @AssignedOrUuid). That
+    // distinction is the whole fix for the offline write path.
+    //
+    // The offline client mints the row's UUID itself so the row it showed the
+    // user and the row the server stores are the same row. But with a GENERATOR,
+    // Hibernate treats a populated id as proof the row was already persisted -
+    // "a generated id is null until insert" - so persist() on the replayed row
+    // threw "detached entity passed to persist", and merge() on it threw
+    // StaleObjectStateException (it tried to UPDATE a row that does not exist).
+    // No @Version type could paper over that: the id itself was the tell.
+    //
+    // An assigned id carries no such assumption - a set id is its normal state
+    // before an insert - so persist() inserts it. The default UUID keeps every
+    // existing caller working unchanged: they build the entity without an id and
+    // still get one (the same random v4 the old generator produced), while the
+    // sync writer overwrites it with the client's id via setId() before saving.
     @Id
-    @AssignedOrUuid
-    private UUID id;
+    private UUID id = UUID.randomUUID();
 
     // True until this instance has been loaded from, or written to, the database.
     //
     // This is the linchpin of the offline write path, and the reason the whole
-    // class implements Persistable. Spring Data's save() must choose persist
-    // (INSERT) or merge (SELECT-then-UPDATE) for an entity, and its own guess is
-    // wrong here in BOTH directions: with a primitive @Version it decides by the
-    // id, so an assigned id looks like an existing row and it MERGEs - the UPDATE
-    // hits nothing and Hibernate throws StaleObjectStateException; with a boxed
-    // @Version it decides by the version, and a fresh instance's null version on
-    // an already-set generated id reads as a detached row it refuses outright.
-    // Either way the offline replay - which sets the client's id BEFORE saving a
-    // brand-new row - could never insert, so @AssignedOrUuid never got to keep
-    // that id. Persistable.isNew() takes the decision away from the heuristic: a
-    // just-built instance is new (persist), a loaded one is not (merge).
+    // class implements Persistable. With an assigned id, Spring Data's save()
+    // cannot tell a new row from an edit (the id is always set), so it would
+    // merge everything - a SELECT-then-UPDATE that finds nothing for a brand-new
+    // offline row. Persistable.isNew() makes the call explicit: a just-built
+    // instance is new (persist -> INSERT), a loaded one is not (merge -> UPDATE).
     @Transient
     private boolean persisted;
 
