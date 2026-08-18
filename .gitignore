@@ -13,3 +13,6 @@ replay_pid*.log
 
 # Fly CLI workspace.
 .fly/
+
+# k6 load-test credential (never commit)
+loadtest/pw.txt

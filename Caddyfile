@@ -1,32 +1,44 @@
-# TLS terminator in front of the API.
+# TLS terminator + static host for the Center web app.
 #
-# HTTPS is not optional here: the frontend is served over HTTPS from Vercel, and
-# a browser refuses to let an HTTPS page call a plain HTTP API. A backend on
-# http:// is a backend the deployed app cannot talk to at all.
+# One origin serves both: the API under /api/*, and the React SPA for everything
+# else. Same-origin means the browser needs no CORS at all, and the app calls
+# /api directly (VITE_API_URL is left empty at build time).
 #
-# Caddy obtains and renews the certificate by itself. The only requirement is
-# that API_DOMAIN already resolves to this server (an A record) and that ports
-# 80 and 443 are reachable - the ACME challenge arrives on 80.
+# Caddy obtains and renews the certificate by itself. API_DOMAIN must resolve to
+# this server and ports 80/443 must be reachable - the ACME challenge is on 80.
 
 {$API_DOMAIN} {
-	# Caddy sets X-Forwarded-For, which is what LoginRateLimiter reads to tell
-	# callers apart - without it every login attempt would look like it came
-	# from Caddy and one attacker would lock out the whole world. That header is
-	# only trustworthy because the api container publishes no ports: nothing can
-	# reach it except through here.
-	reverse_proxy api:8001
+	# The API. Caddy sets X-Forwarded-For, which LoginRateLimiter reads to tell
+	# callers apart; the api container publishes no ports, so nothing can reach
+	# it except through here and the header cannot be spoofed from outside.
+	handle /api/* {
+		reverse_proxy api:8001
+	}
+
+	# The web app: static files, with an SPA fallback so client-side routes
+	# (/students, /login, ...) all resolve to index.html.
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Hashed build assets never change under their name - cache them hard.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
 
 	header {
 		# Tell browsers to refuse plain HTTP to this host from now on.
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
-		# The API answers JSON and PDFs; nothing here is meant to be framed.
 		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
 		-Server
 	}
 
-	# Responses are already gzipped by Spring (server.compression), so there is
-	# nothing here for Caddy to compress again.
+	# Compress text responses. Caddy skips anything already encoded, so the
+	# API's own gzip (server.compression) is not double-compressed.
+	encode gzip
 
 	log {
 		output stdout

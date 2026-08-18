@@ -52,6 +52,9 @@ services:
       API_DOMAIN: ${API_DOMAIN}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The built web app (center-web `npm run build` output), served as static
+      # files. Same origin as the API, so the browser needs no CORS.
+      - ./web:/srv/web:ro
       # Certificates live here. Losing this volume means re-issuing them, and
       # Let's Encrypt rate-limits that - keep it.
       - caddy_data:/data
