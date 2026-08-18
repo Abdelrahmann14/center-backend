@@ -73,7 +73,14 @@ public final class ModuleCatalog {
                     p("STUDENT_VIEW", "VIEW", "عرض الطلاب", 0),
                     p("STUDENT_CREATE", "CREATE", "إضافة طالب", 1),
                     p("STUDENT_UPDATE", "UPDATE", "تعديل طالب", 2),
-                    p("STUDENT_DELETE", "DELETE", "حذف طالب", 3))),
+                    p("STUDENT_DELETE", "DELETE", "حذف طالب", 3),
+                    // Every action on the student screen is now delegatable, so
+                    // these two live here rather than parked under an admin-only
+                    // module. The sync runner re-parents the existing rows on boot
+                    // (it sets each permission's module_id from this list), so no
+                    // migration is needed and existing grants keep their ids.
+                    p("STUDENT_ANALYTICS", "VIEW", "عرض تقرير الطالب", 4),
+                    p("STUDENT_REPORT_SEND", "SEND", "إرسال تقرير/باركود الطالب", 5))),
             new ModuleDef("LESSONS", "الحصص", "إنشاء وإدارة الحصص", "workspace", true, true, true, 20, List.of(
                     p("LESSON_VIEW", "VIEW", "عرض الحصص", 0),
                     p("LESSON_CREATE", "CREATE", "إضافة حصة", 1),
@@ -92,16 +99,17 @@ public final class ModuleCatalog {
                     p("NOTIFICATION_SEND", "SEND", "إرسال رسائل واتساب", 0))),
             // ── Admin-only (not delegatable). The admin holds these; they never
             //    appear in the assistant grant editor, and no assistant can get
-            //    them. STUDENT_ANALYTICS / STUDENT_REPORT_SEND are parked here so
-            //    the student screen stays delegatable while these actions do not. ──
+            //    them: ANALYTICS, GROUPS, ASSISTANTS. ──
             new ModuleDef("EXAMS", "الاختبارات", "بناء ونشر اختبارات الحصص", "workspace", true, false, true, 50, List.of(
                     p("EXAM_CREATE", "CREATE", "إنشاء اختبار", 1),
                     p("EXAM_UPDATE", "UPDATE", "تعديل اختبار", 2),
                     p("EXAM_DELETE", "DELETE", "حذف اختبار", 3),
                     p("EXAM_PUBLISH", "PUBLISH", "نشر اختبار", 4))),
-            new ModuleDef("ANALYTICS", "الإحصائيات", "لوحة التحليلات والإحصاءات", "workspace", true, false, true, 70, List.of(
-                    p("STUDENT_ANALYTICS", "VIEW", "عرض تحليلات الطالب", 0),
-                    p("STUDENT_REPORT_SEND", "SEND", "إرسال تقرير الطالب", 1))),
+            // The main analytics dashboard stays admin-only and carries no
+            // delegatable permission of its own (the screen is gated on the
+            // module + admin role). Its former two student-report permissions
+            // moved to STUDENTS above.
+            new ModuleDef("ANALYTICS", "الإحصائيات", "لوحة التحليلات والإحصاءات", "workspace", true, false, true, 70, List.of()),
             new ModuleDef("GROUPS", "المجموعات والسناتر", "إدارة السناتر ومجموعات الطلاب ومواعيدها", "workspace", true, false, true, 80, List.of()),
             new ModuleDef("ASSISTANTS", "المساعدون", "حسابات المساعدين والصلاحيات", "workspace", true, false, true, 90, List.of()));
 }
