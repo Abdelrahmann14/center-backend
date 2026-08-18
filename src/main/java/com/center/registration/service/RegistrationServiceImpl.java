@@ -270,7 +270,13 @@ public class RegistrationServiceImpl implements RegistrationService {
     }
 
     @Override
-    @Transactional
+    // noRollbackFor: the sync layer replays a delete idempotently and swallows a
+    // "not found" (the row was already gone). Without this, that RNF - thrown by a
+    // @Transactional method - marks the surrounding sync transaction rollback-only,
+    // and the mutation that caught it then fails its own commit with
+    // UnexpectedRollbackException. The RNF is raised before any write, so not
+    // rolling back on it changes nothing else.
+    @Transactional(noRollbackFor = ResourceNotFoundException.class)
     public void unregister(UUID registrationId) {
         if (!registrationRepository.existsById(registrationId)) {
             throw new ResourceNotFoundException(NOT_FOUND);

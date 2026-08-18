@@ -199,7 +199,9 @@ public class FinanceServiceImpl implements FinanceService {
     }
 
     @Override
-    @Transactional
+    // noRollbackFor: idempotent sync delete catches "already gone"; the RNF is
+    // pre-write (see RegistrationServiceImpl.unregister).
+    @Transactional(noRollbackFor = ResourceNotFoundException.class)
     public void deleteEntry(UUID entryId) {
         if (!financeEntryRepository.existsById(entryId)) {
             throw new ResourceNotFoundException(ENTRY_NOT_FOUND);

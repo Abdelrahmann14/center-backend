@@ -99,7 +99,9 @@ public class GroupServiceImpl implements GroupService {
     }
 
     @Override
-    @Transactional
+    // noRollbackFor: idempotent sync delete catches "already gone"; the RNF is
+    // raised before any write (see RegistrationServiceImpl.unregister).
+    @Transactional(noRollbackFor = ResourceNotFoundException.class)
     public void delete(UUID groupId, UUID transferToGroupId) {
         Group group = groupRepository.findById(groupId)
                 .orElseThrow(() -> new ResourceNotFoundException(NOT_FOUND));

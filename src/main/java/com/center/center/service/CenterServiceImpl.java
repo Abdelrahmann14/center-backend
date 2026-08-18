@@ -95,7 +95,9 @@ public class CenterServiceImpl implements CenterService {
     }
 
     @Override
-    @Transactional
+    // noRollbackFor: idempotent sync delete catches "already gone"; the RNF is
+    // pre-write (see RegistrationServiceImpl.unregister).
+    @Transactional(noRollbackFor = ResourceNotFoundException.class)
     public void delete(UUID centerId) {
         if (!centerRepository.existsById(centerId)) {
             throw new ResourceNotFoundException(NOT_FOUND);

@@ -89,7 +89,9 @@ public class LectureServiceImpl implements LectureService {
     }
 
     @Override
-    @Transactional
+    // noRollbackFor: idempotent sync delete catches "already gone"; the RNF is
+    // pre-write (see RegistrationServiceImpl.unregister).
+    @Transactional(noRollbackFor = ResourceNotFoundException.class)
     public void delete(UUID lectureId) {
         if (!lectureRepository.existsById(lectureId)) {
             throw new ResourceNotFoundException(NOT_FOUND);

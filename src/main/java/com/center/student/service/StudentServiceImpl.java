@@ -197,7 +197,10 @@ public class StudentServiceImpl implements StudentService {
     }
 
     @Override
-    @Transactional
+    // noRollbackFor: an idempotent sync delete catches "already gone"; the RNF is
+    // pre-write, so it must not mark the sync transaction rollback-only (see the
+    // note on RegistrationServiceImpl.unregister).
+    @Transactional(noRollbackFor = ResourceNotFoundException.class)
     public void delete(UUID studentId) {
         if (!studentRepository.existsById(studentId)) {
             throw new ResourceNotFoundException(NOT_FOUND);
