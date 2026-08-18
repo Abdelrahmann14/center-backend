@@ -181,7 +181,7 @@ public class StudentServiceImpl implements StudentService {
             student = new Student();
             student.setId(studentId);
         }
-        apply(student, request, isNew ? null : studentId);
+        apply(student, request, isNew ? null : studentId, true);
         Student saved = studentRepository.save(student);
         // These numbers were typed with no line to Green API, so nobody could
         // ask about them at the time. Remember them for the background check.
@@ -209,12 +209,25 @@ public class StudentServiceImpl implements StudentService {
     }
 
     private void apply(Student student, StudentRequest request, UUID excludeId) {
+        apply(student, request, excludeId, false);
+    }
+
+    /**
+     * @param acceptDuplicates when true, a duplicate name or phone is accepted
+     *     instead of rejected. Used only by the offline replay ({@code upsert}):
+     *     an offline write had no line to run the duplicate check the online form
+     *     runs, so refusing it on sync would silently drop what the user saved.
+     *     Online create/update keep enforcing the rules (the form warns first).
+     */
+    private void apply(Student student, StudentRequest request, UUID excludeId, boolean acceptDuplicates) {
         String[] studentPhones = normalisePhones(request.studentPhones(), "الطالب");
         String[] parentPhones = normalisePhones(request.parentPhones(), "ولي الأمر");
         String name = request.name().strip();
         assertFullName(name);
 
-        assertUnique(name, studentPhones, excludeId, request.allowsDuplicatePhone());
+        assertUnique(name, studentPhones, excludeId,
+                acceptDuplicates,
+                acceptDuplicates || request.allowsDuplicatePhone());
 
         Group group = resolveGroup(request.groupId());
         ResolvedPrice price = resolvePrice(group, request.lessonPrice());
@@ -301,9 +314,10 @@ public class StudentServiceImpl implements StudentService {
         return trimmed;
     }
 
-    private void assertUnique(String name, String[] phones, UUID excludeId, boolean allowDuplicatePhone) {
+    private void assertUnique(String name, String[] phones, UUID excludeId,
+            boolean allowDuplicateName, boolean allowDuplicatePhone) {
         UUID exclude = excludeId == null ? StudentRepository.NO_EXCLUSION : excludeId;
-        if (studentRepository.existsByNameAndIdNot(name, exclude)) {
+        if (!allowDuplicateName && studentRepository.existsByNameAndIdNot(name, exclude)) {
             throw new DuplicateResourceException(DUPLICATE_NAME);
         }
         // Siblings legitimately share a parent's phone, so the UI can override.

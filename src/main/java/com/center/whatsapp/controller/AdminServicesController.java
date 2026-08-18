@@ -97,6 +97,12 @@ public class AdminServicesController {
         return new WhatsappDelayResponse(whatsapp.setDelaySeconds(owner(), id, req.delaySeconds()));
     }
 
+    @GetMapping("/whatsapp/{id}/queue")
+    @Operation(summary = "Messages still waiting to be sent from this number")
+    public List<java.util.Map<String, Object>> queue(@PathVariable UUID id) {
+        return whatsapp.messagesQueue(owner(), id);
+    }
+
     @GetMapping("/whatsapp/responsibilities")
     public List<WhatsappResponsibilityResponse> responsibilities() {
         return whatsapp.responsibilities(owner());

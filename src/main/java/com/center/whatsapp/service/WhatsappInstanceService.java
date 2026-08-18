@@ -327,6 +327,30 @@ public class WhatsappInstanceService {
         }
     }
 
+    // ---- outgoing message queue (Green API, per instance) -------------------
+
+    /**
+     * The messages still waiting to leave this instance - Green API's
+     * {@code showMessagesQueue}. Read live with no lock or transaction held, so a
+     * slow third party is its own problem. Returned as-is (chatId, typeMessage,
+     * body, ...) for the UI to render.
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> messagesQueue(UUID owner, UUID id) {
+        WhatsappInstance w = require(owner, id);
+        try {
+            List<Map<String, Object>> res = rest.get()
+                    .uri(w.getBaseUrl() + "/waInstance{id}/showMessagesQueue/{token}",
+                            w.getInstanceId(), w.getApiToken())
+                    .retrieve()
+                    .body(List.class);
+            return res == null ? List.of() : res;
+        } catch (RestClientException ex) {
+            log.error("Green API showMessagesQueue failed: {}", ex.getMessage());
+            throw new BusinessRuleException("تعذّر جلب طابور الرسائل، حاول مرة أخرى");
+        }
+    }
+
     // ---- responsibilities - scoped by owner ---------------------------------
 
     @Transactional(readOnly = true)

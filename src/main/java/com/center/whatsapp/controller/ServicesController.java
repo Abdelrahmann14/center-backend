@@ -88,6 +88,12 @@ public class ServicesController {
         return new WhatsappDelayResponse(whatsapp.setDelaySeconds(null, id, req.delaySeconds()));
     }
 
+    @GetMapping("/whatsapp/{id}/queue")
+    @Operation(summary = "Messages still waiting to be sent from this number")
+    public List<java.util.Map<String, Object>> queue(@PathVariable UUID id) {
+        return whatsapp.messagesQueue(null, id);
+    }
+
     @GetMapping("/whatsapp/responsibilities")
     @Operation(summary = "The responsibility catalog with current assignments")
     public List<WhatsappResponsibilityResponse> responsibilities() {
