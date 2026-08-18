@@ -178,9 +178,14 @@ app:
   ai:
     # AI message-variant generation via an OpenAI-compatible API (Groq). The API
     # key is a secret and lives in .env; blank turns the feature off.
+    #
+    # The model must be one the key's Groq account can actually serve - a
+    # decommissioned or unavailable id returns 404 model_not_found and the whole
+    # feature fails. Groq rotates its lineup, so check the account's /v1/models if
+    # generation starts erroring, and override with AI_MODEL if needed.
     base-url: ${AI_BASE_URL:https://api.groq.com/openai/v1}
     api-key: ${GROQ_API_KEY:}
-    model: ${AI_MODEL:llama-3.3-70b-versatile}
+    model: ${AI_MODEL:openai/gpt-oss-120b}
     enabled: ${AI_ENABLED:true}
 
   registration:
