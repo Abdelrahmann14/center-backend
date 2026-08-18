@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -102,15 +103,13 @@ public class WhatsappNumberService {
         if (wanted.isEmpty()) {
             return;
         }
-        Set<String> present = repository.findByPhoneIn(wanted).stream()
-                .map(WhatsappNumber::getPhone)
-                .collect(Collectors.toSet());
-        List<WhatsappNumber> fresh = wanted.stream()
-                .filter(p -> !present.contains(p))
-                .map(WhatsappNumber::new)
-                .toList();
-        if (!fresh.isEmpty()) {
-            repository.saveAll(fresh);
+        // Idempotent per number: the database drops a duplicate rather than
+        // throwing, so this can never abort the transaction that called it (the
+        // offline replay queues these while saving the student). @TenantId is not
+        // applied to a native insert, so the workspace is passed explicitly.
+        UUID admin = TenantContext.get();
+        for (String phone : wanted) {
+            repository.queueIfAbsent(admin, phone);
         }
     }
 

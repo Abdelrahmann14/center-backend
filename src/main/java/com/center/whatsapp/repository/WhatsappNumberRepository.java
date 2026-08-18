@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
 import com.center.whatsapp.entity.WhatsappNumber;
@@ -19,6 +20,27 @@ public interface WhatsappNumberRepository extends JpaRepository<WhatsappNumber, 
     Optional<WhatsappNumber> findByPhone(String phone);
 
     List<WhatsappNumber> findByPhoneIn(List<String> phones);
+
+    /**
+     * Queue one number to be checked later, idempotently.
+     *
+     * <p>The unique key is {@code (admin_id, phone)}. A read-then-insert races -
+     * two offline pushes, or a push and the background sweep, can both see a
+     * number absent and both try to add it, and the loser's insert violates that
+     * key. Because it runs inside the student's own transaction (the offline
+     * replay queues the numbers as it saves the student), that violation used to
+     * abort the whole thing and the student was rejected on sync. {@code ON
+     * CONFLICT DO NOTHING} lets the database settle the race, so a number already
+     * present is a no-op instead of an error and the student write is never at
+     * risk. Native because JPA has no upsert.
+     */
+    @Modifying
+    @Query(value = """
+            INSERT INTO whatsapp_numbers (id, admin_id, phone, attempts, created_at)
+            VALUES (gen_random_uuid(), :adminId, :phone, 0, now())
+            ON CONFLICT (admin_id, phone) DO NOTHING
+            """, nativeQuery = true)
+    void queueIfAbsent(UUID adminId, String phone);
 
     /**
      * Numbers still waiting on an answer and still worth retrying, oldest first.

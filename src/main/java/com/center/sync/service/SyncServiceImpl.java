@@ -135,9 +135,11 @@ public class SyncServiceImpl implements SyncService {
                 // A constraint the client could not have checked offline (a
                 // missing FK target, a unique key another device already took).
                 // Its transaction is gone; report it and keep draining the batch.
+                // The specific constraint travels back too - on a hosted box the
+                // logs are unreadable, and "which key" is the whole diagnosis.
                 log.warn("sync: mutation {} violated a constraint: {}", m.mutationId(), ex.getMostSpecificCause().getMessage());
                 results.add(SyncMutationResult.rejected(m.mutationId(), m.rowId(),
-                        "تعارض في البيانات - تعذّر حفظ هذا التعديل"));
+                        "تعارض في البيانات - تعذّر حفظ هذا التعديل (" + rootCause(ex) + ")"));
             } catch (RuntimeException ex) {
                 // Anything that reached here is unexpected - not a validation
                 // refusal, not a constraint. The full stack is logged, but on a
