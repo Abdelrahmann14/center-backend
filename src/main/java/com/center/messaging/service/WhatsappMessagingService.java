@@ -94,6 +94,7 @@ public class WhatsappMessagingService {
     private final WhatsappLogSender logSender;
     private final GreenApiClient greenApiClient;
     private final com.center.student.service.StudentBarcodeService barcodeService;
+    private final com.center.student.service.StudentReportService reportService;
 
     /**
      * This service through its own Spring proxy.
@@ -124,7 +125,8 @@ public class WhatsappMessagingService {
                 toResponse(ensure(AutomationType.ATTENDANCE)),
                 toResponse(ensure(AutomationType.ABSENCE)),
                 toResponse(ensure(AutomationType.NEW_STUDENT)),
-                toResponse(ensure(AutomationType.EXAM_GRADE)));
+                toResponse(ensure(AutomationType.EXAM_GRADE)),
+                toResponse(ensure(AutomationType.REPORT)));
     }
 
     @Transactional
@@ -583,6 +585,98 @@ public class WhatsappMessagingService {
     }
 
     /**
+     * Re-send the "new student" message + barcode card for an existing student, on
+     * the teacher's say-so (the barcode button). Uses the SAME NEW_STUDENT template
+     * and recipients the automatic welcome uses - so the manual button and the
+     * on-create message are one and the same - but skips the automatic path's
+     * enabled/once-ever guards, since this is an explicit resend.
+     */
+    public String sendBarcode(UUID studentId) {
+        PlannedCard planned = self.planStudentCard(studentId, AutomationType.NEW_STUDENT);
+        byte[] card;
+        String fileName;
+        try {
+            card = barcodeService.renderPdf(studentId);
+            fileName = barcodeService.fileName(studentId);
+        } catch (RuntimeException ex) {
+            card = null;
+            fileName = null;
+        }
+        String phone = null;
+        for (WhatsappLogSender.Recipient r : planned.recipients()) {
+            logSender.logAndSendFile(r, planned.body(), card, fileName, "MANUAL", "BARCODE");
+            if (phone == null) {
+                phone = r.phone();
+            }
+        }
+        return phone;
+    }
+
+    /**
+     * The message body + recipients for a manual student-card send, resolved from
+     * one automation template. Requires the template to be written (throws the same
+     * "write the message first" error the other manual sends do).
+     */
+    @Transactional(readOnly = true)
+    public PlannedCard planStudentCard(UUID studentId, AutomationType type) {
+        Student s = studentRepository.findById(studentId)
+                .orElseThrow(() -> new ResourceNotFoundException("الطالب غير موجود"));
+        MessageAutomation a = requireAutomation(type);
+        List<MessageVariant> variants = requireVariants(a);
+        Map<String, String> vars = MessageText.studentVars(s, teacherName());
+        vars.put("parent.name", parentName(s.getId()));
+        MessageVariant picked = randomVariant(variants);
+        String body = MessageText.render(picked.getBody(), vars);
+        String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
+        return new PlannedCard(recipients(s, code, a.getAudience()), body, studentId);
+    }
+
+    /**
+     * Send the student report PDF with the REPORT template's text, to the one
+     * recipient the button chose (the parent or the student). Unlike the other
+     * templates the recipient is NOT the template's audience here - the report has
+     * an explicit parent/student button - so the template supplies only the text.
+     */
+    public String sendReport(UUID studentId, boolean toParent) {
+        PlannedCard planned = self.planReportCard(studentId, toParent);
+        byte[] pdf;
+        String fileName;
+        try {
+            pdf = reportService.renderPdf(studentId);
+            fileName = reportService.fileName(studentId);
+        } catch (RuntimeException ex) {
+            pdf = null;
+            fileName = null;
+        }
+        WhatsappLogSender.Recipient r = planned.recipients().get(0);
+        logSender.logAndSendFile(r, planned.body(), pdf, fileName, "MANUAL", "REPORT");
+        return r.phone();
+    }
+
+    @Transactional(readOnly = true)
+    public PlannedCard planReportCard(UUID studentId, boolean toParent) {
+        Student s = studentRepository.findById(studentId)
+                .orElseThrow(() -> new ResourceNotFoundException("الطالب غير موجود"));
+        MessageAutomation a = requireAutomation(AutomationType.REPORT);
+        List<MessageVariant> variants = requireVariants(a);
+        String phone = toParent
+                ? MessageText.firstPhone(s.getParentPhones())
+                : MessageText.firstPhone(s.getStudentPhones());
+        if (phone == null || phone.isBlank()) {
+            throw new BusinessRuleException(toParent
+                    ? "لا يوجد رقم هاتف لولي الأمر" : "لا يوجد رقم هاتف للطالب");
+        }
+        Map<String, String> vars = MessageText.studentVars(s, teacherName());
+        vars.put("parent.name", parentName(s.getId()));
+        MessageVariant picked = randomVariant(variants);
+        String body = MessageText.render(picked.getBody(), vars);
+        String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
+        WhatsappLogSender.Recipient r = new WhatsappLogSender.Recipient(
+                s.getName(), phone, code, toParent ? "PARENT" : "STUDENT", s.getId());
+        return new PlannedCard(java.util.List.of(r), body, studentId);
+    }
+
+    /**
      * Send the exam-grade message to this lesson-group's graded students who have
      * not been told yet.
      *
@@ -627,6 +721,8 @@ public class WhatsappMessagingService {
         return switch (type) {
             case ABSENCE -> "الغياب";
             case EXAM_GRADE -> "درجة الاختبار";
+            case NEW_STUDENT -> "طالب جديد";
+            case REPORT -> "التقرير";
             default -> "الحضور";
         };
     }

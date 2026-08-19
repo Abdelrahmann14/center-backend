@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.center.student.dto.StudentAnalyticsResponse;
 import com.center.student.service.StudentAnalyticsService;
 import com.center.student.service.StudentReportService;
-import com.center.student.service.StudentReportService.Recipient;
+import com.center.messaging.service.WhatsappMessagingService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -37,6 +37,7 @@ public class StudentAnalyticsController {
 
     private final StudentAnalyticsService analyticsService;
     private final StudentReportService reportService;
+    private final WhatsappMessagingService messagingService;
 
     @GetMapping
     @Operation(summary = "A student's attendance and exam history",
@@ -62,13 +63,14 @@ public class StudentAnalyticsController {
     @PreAuthorize("hasAuthority('PERM_STUDENT_REPORT_SEND')")
     @Operation(summary = "Send the report to the parent's WhatsApp")
     public Map<String, String> sendToParent(@PathVariable UUID studentId) {
-        return Map.of("phone", reportService.send(studentId, Recipient.PARENT));
+        // Report PDF + the configurable REPORT template's text.
+        return Map.of("phone", messagingService.sendReport(studentId, true));
     }
 
     @PostMapping("/report/send/student")
     @PreAuthorize("hasAuthority('PERM_STUDENT_REPORT_SEND')")
     @Operation(summary = "Send the report to the student's WhatsApp")
     public Map<String, String> sendToStudent(@PathVariable UUID studentId) {
-        return Map.of("phone", reportService.send(studentId, Recipient.STUDENT));
+        return Map.of("phone", messagingService.sendReport(studentId, false));
     }
 }

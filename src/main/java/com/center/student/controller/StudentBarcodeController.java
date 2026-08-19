@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.center.student.service.StudentBarcodeService;
+import com.center.messaging.service.WhatsappMessagingService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -33,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 public class StudentBarcodeController {
 
     private final StudentBarcodeService barcodeService;
+    private final WhatsappMessagingService messagingService;
 
     @GetMapping
     @PreAuthorize("hasAnyAuthority('PERM_STUDENT_VIEW','PERM_REGISTRATION_ACCESS')")
@@ -50,8 +52,9 @@ public class StudentBarcodeController {
 
     @PostMapping("/send")
     @PreAuthorize("hasAuthority('PERM_STUDENT_REPORT_SEND')")
-    @Operation(summary = "Send the barcode card to the student's WhatsApp")
+    @Operation(summary = "Send the new-student message + barcode card to WhatsApp")
     public Map<String, String> send(@PathVariable UUID studentId) {
-        return Map.of("phone", barcodeService.send(studentId));
+        // The same template + recipients as the automatic "new student" message.
+        return Map.of("phone", messagingService.sendBarcode(studentId));
     }
 }
