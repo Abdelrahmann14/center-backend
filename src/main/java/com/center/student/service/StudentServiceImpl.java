@@ -307,9 +307,9 @@ public class StudentServiceImpl implements StudentService {
 
     private static String requireDiscountReason(String reason) {
         String trimmed = reason == null ? "" : reason.strip();
-        if (trimmed.length() < ValidationRules.DISCOUNT_REASON_MIN) {
-            throw new BusinessRuleException(
-                    "اذكر سبب الخصم (" + ValidationRules.DISCOUNT_REASON_MIN + " أحرف على الأقل)");
+        // A discount needs a reason, but any text - no minimum length.
+        if (trimmed.isEmpty()) {
+            throw new BusinessRuleException("اذكر سبب الخصم");
         }
         return trimmed;
     }
