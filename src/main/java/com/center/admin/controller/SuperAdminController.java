@@ -48,6 +48,10 @@ import com.center.settings.service.SettingsService;
 import com.center.admin.service.SuperAdminModuleService;
 import com.center.admin.service.SuperAdminService;
 import com.center.notification.service.VariableCatalog;
+import com.center.whatsapp.dto.WhatsappInstanceRequest;
+import com.center.whatsapp.dto.WhatsappLabelRequest;
+import com.center.whatsapp.dto.WhatsappStatusResponse;
+import com.center.whatsapp.service.WhatsappInstanceService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -70,6 +74,7 @@ public class SuperAdminController {
     private final SuperAdminModuleService superAdminModuleService;
     private final SettingsService settingsService;
     private final MessageTemplateService messageTemplateService;
+    private final WhatsappInstanceService whatsapp;
 
     @GetMapping("/admins")
     @Operation(summary = "List every Admin with workspace counts")
@@ -182,6 +187,38 @@ public class SuperAdminController {
     @Operation(summary = "Enable or disable the WhatsApp feature for one Admin")
     public void setWhatsappSync(@PathVariable UUID adminId, @Valid @RequestBody ModuleToggleRequest request) {
         superAdminService.setWhatsappSync(adminId, request.enabled());
+    }
+
+    // The super admin provisions each Admin's WhatsApp numbers: they hold the
+    // Green API credentials and enter them here (instance id + token). The Admin
+    // then only sees a card to scan the QR and a field to name the number - it
+    // never sees or enters the credentials.
+
+    @GetMapping("/admins/{adminId}/whatsapp")
+    @Operation(summary = "One Admin's WhatsApp numbers with live state")
+    public List<WhatsappStatusResponse> adminWhatsapp(@PathVariable UUID adminId) {
+        return whatsapp.list(adminId);
+    }
+
+    @PostMapping("/admins/{adminId}/whatsapp")
+    @Operation(summary = "Provision a WhatsApp number for an Admin (Green API credentials)")
+    public WhatsappStatusResponse addAdminWhatsapp(@PathVariable UUID adminId,
+            @Valid @RequestBody WhatsappInstanceRequest request) {
+        return whatsapp.add(adminId, request);
+    }
+
+    @PutMapping("/admins/{adminId}/whatsapp/{id}/label")
+    @Operation(summary = "Rename one of an Admin's WhatsApp numbers")
+    public WhatsappStatusResponse renameAdminWhatsapp(@PathVariable UUID adminId, @PathVariable UUID id,
+            @Valid @RequestBody WhatsappLabelRequest request) {
+        return whatsapp.rename(adminId, id, request.label());
+    }
+
+    @DeleteMapping("/admins/{adminId}/whatsapp/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "Remove one of an Admin's WhatsApp numbers")
+    public void removeAdminWhatsapp(@PathVariable UUID adminId, @PathVariable UUID id) {
+        whatsapp.delete(adminId, id);
     }
 
     @PostMapping("/admins")

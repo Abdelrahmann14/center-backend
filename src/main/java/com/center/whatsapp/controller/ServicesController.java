@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.center.whatsapp.dto.WhatsappDelayRequest;
 import com.center.whatsapp.dto.WhatsappDelayResponse;
 import com.center.whatsapp.dto.WhatsappInstanceRequest;
+import com.center.whatsapp.dto.WhatsappLabelRequest;
 import com.center.whatsapp.dto.WhatsappResponsibilityAssignRequest;
 import com.center.whatsapp.dto.WhatsappQrResponse;
 import com.center.whatsapp.dto.WhatsappResponsibilityResponse;
@@ -74,6 +75,12 @@ public class ServicesController {
     @Operation(summary = "Unlink a WhatsApp number")
     public WhatsappStatusResponse logout(@PathVariable UUID id) {
         return whatsapp.logout(null, id);
+    }
+
+    @PutMapping("/whatsapp/{id}/label")
+    @Operation(summary = "Rename a WhatsApp number")
+    public WhatsappStatusResponse rename(@PathVariable UUID id, @Valid @RequestBody WhatsappLabelRequest req) {
+        return whatsapp.rename(null, id, req.label());
     }
 
     @GetMapping("/whatsapp/{id}/delay")

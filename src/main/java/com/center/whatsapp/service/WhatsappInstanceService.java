@@ -234,6 +234,18 @@ public class WhatsappInstanceService {
         repo.delete(w);
     }
 
+    /**
+     * Rename a number's friendly label. This is the only mutation an admin makes
+     * to their own numbers - the Green API credentials are provisioned for them by
+     * the super admin, so all the admin does is name each number and scan its QR.
+     */
+    @Transactional
+    public WhatsappStatusResponse rename(UUID owner, UUID id, String label) {
+        WhatsappInstance w = require(owner, id);
+        w.setLabel(label == null || label.isBlank() ? null : label.trim());
+        return toStatus(w);
+    }
+
     @Transactional(readOnly = true)
     @SuppressWarnings("unchecked")
     public WhatsappQrResponse qr(UUID owner, UUID id) {

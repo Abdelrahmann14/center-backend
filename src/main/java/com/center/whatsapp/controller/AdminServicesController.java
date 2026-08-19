@@ -3,21 +3,18 @@ package com.center.whatsapp.controller;
 import java.util.List;
 import java.util.UUID;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.center.whatsapp.dto.WhatsappDelayRequest;
 import com.center.whatsapp.dto.WhatsappDelayResponse;
-import com.center.whatsapp.dto.WhatsappInstanceRequest;
+import com.center.whatsapp.dto.WhatsappLabelRequest;
 import com.center.whatsapp.dto.WhatsappResponsibilityAssignRequest;
 import com.center.whatsapp.dto.WhatsappQrResponse;
 import com.center.whatsapp.dto.WhatsappResponsibilityResponse;
@@ -64,15 +61,13 @@ public class AdminServicesController {
         return whatsapp.list(owner());
     }
 
-    @PostMapping("/whatsapp")
-    public WhatsappStatusResponse add(@Valid @RequestBody WhatsappInstanceRequest req) {
-        return whatsapp.add(owner(), req);
-    }
-
-    @DeleteMapping("/whatsapp/{id}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void remove(@PathVariable UUID id) {
-        whatsapp.delete(owner(), id);
+    // The admin does NOT add or remove their own numbers: the super admin
+    // provisions the Green API credentials for them. All the admin does with a
+    // number is rename it and scan its QR to link it.
+    @PutMapping("/whatsapp/{id}/label")
+    @Operation(summary = "Rename one of the admin's numbers")
+    public WhatsappStatusResponse rename(@PathVariable UUID id, @Valid @RequestBody WhatsappLabelRequest req) {
+        return whatsapp.rename(owner(), id, req.label());
     }
 
     @GetMapping("/whatsapp/{id}/qr")
