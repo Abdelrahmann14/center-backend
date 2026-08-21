@@ -214,7 +214,7 @@ public class WhatsappInstanceService {
     }
 
     private static Creds credsOf(WhatsappInstance w) {
-        return new Creds(w.getId(), w.getPhoneNumberId(), w.getPhone(), true);
+        return new Creds(w.getId(), w.getPhoneNumberId(), w.getPhone(), true, null);
     }
 
     // ---- number pool (UI) - scoped by owner ---------------------------------
