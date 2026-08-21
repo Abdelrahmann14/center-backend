@@ -1,5 +1,6 @@
 package com.center.whatsapp.cloud.service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -11,6 +12,7 @@ import java.util.regex.Pattern;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -63,12 +65,78 @@ public class CloudApiClient {
     private final ApplicationProperties properties;
     private final RestClient rest;
     private final ObjectMapper mapper;
+    private final WhatsappThrottle throttle;
 
-    /** The outcome of a best-effort send. {@code messageId} is Meta's {@code wamid}. */
-    public record SendResult(boolean sent, String messageId, String failureReason) {
+    /**
+     * The outcome of a best-effort send. {@code messageId} is Meta's {@code wamid}.
+     *
+     * <p>{@code errorCode} is Meta's numeric code, and it is the only part of a
+     * failure worth branching on. The sentence beside it is written for a human
+     * and Meta rewords it freely; the number is stable and documented. Without
+     * it "wait thirty seconds and this works" and "send one more and the account
+     * gets restricted" are the same event to this code, which is how a single
+     * rejection used to become several hundred.
+     *
+     * <p>Null means Meta gave no code: a socket timeout, a DNS failure, or a
+     * refusal this client raised before ever calling out. Those are retryable in
+     * the ordinary way and are deliberately in none of the classes below.
+     */
+    public record SendResult(boolean sent, String messageId, String failureReason,
+            Integer errorCode) {
 
         public static SendResult failed(String reason) {
-            return new SendResult(false, null, reason);
+            return new SendResult(false, null, reason, null);
+        }
+
+        public static SendResult failed(String reason, Integer code) {
+            return new SendResult(false, null, reason, code == null || code == 0 ? null : code);
+        }
+
+        /** The same message, seconds later, works. Retry it in place. */
+        public boolean retryable() {
+            return errorCode != null && (errorCode == 130429 || errorCode == 131057);
+        }
+
+        /**
+         * Back off this ONE recipient. The rest of the run is unaffected.
+         *
+         * <p>131056 is the pair limit - one message per six seconds to the same
+         * number - and 131049 is Meta declining to hand this particular person
+         * another marketing template today. Both are about the recipient, not
+         * about us, and halting the batch for either would punish everyone else
+         * for one person's inbox.
+         */
+        public boolean recipientBackoff() {
+            return errorCode != null && (errorCode == 131056 || errorCode == 131049);
+        }
+
+        /**
+         * Stop the whole run. Every further call deepens the problem.
+         *
+         * <p>131048 is a restriction Meta placed on the number for quality or
+         * spam; 368 is a policy enforcement on the account; 80007 is the Graph
+         * request budget; 190 is an expired token. Retrying any of them is not
+         * merely useless - for the first two it is the behaviour being measured.
+         */
+        public boolean fatal() {
+            return errorCode != null && (errorCode == 131048 || errorCode == 368
+                    || errorCode == 80007 || errorCode == 190 || errorCode == 133010);
+        }
+
+        /**
+         * Meta will never accept this message. Do not retry it, today or ever.
+         *
+         * <p>131026 is a number that is not on WhatsApp, 131047 a closed
+         * customer-service window, 131050 someone who opted out, and
+         * 132015/135000 a message dropped by template or portfolio pacing after
+         * negative early feedback. Meta's own guidance on the last two is
+         * explicit that retrying distorts your delivery metrics and can extend
+         * the block.
+         */
+        public boolean permanent() {
+            return errorCode != null && (errorCode == 131026 || errorCode == 131047
+                    || errorCode == 131050 || errorCode == 132015 || errorCode == 132016
+                    || errorCode == 135000 || errorCode == 131051);
         }
     }
 
@@ -213,27 +281,177 @@ public class CloudApiClient {
             return SendResult.failed("الرقم غير مسجّل على واتساب");
         }
         try {
-            Map<String, Object> res = rest.post()
+            // toEntity rather than body: the usage headers are only on the
+            // response object, and they are the half of Meta's answer that says
+            // how close we are to being cut off. Reading them only on failures
+            // would mean learning about the budget after it was spent.
+            ResponseEntity<Map> response = rest.post()
                     .uri(graph("/" + phoneNumberId + "/messages"))
                     .headers(this::auth)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(payload)
                     .retrieve()
-                    .body(Map.class);
+                    .toEntity(Map.class);
+            applyUsageHeaders(response.getHeaders());
+            Map<String, Object> res = response.getBody();
             String wamid = null;
             if (res != null && res.get("messages") instanceof List<?> messages && !messages.isEmpty()
                     && messages.get(0) instanceof Map<?, ?> first) {
                 wamid = String.valueOf(first.get("id"));
             }
             log.info("Cloud API message accepted, wamid={}", wamid);
-            return new SendResult(true, wamid, null);
+            return new SendResult(true, wamid, null, null);
         } catch (RestClientResponseException ex) {
+            Integer code = errorCode(ex);
             String reason = describe(ex);
-            log.error("Cloud API send failed: {}", reason);
-            return SendResult.failed(reason);
+            applyUsageHeaders(ex.getResponseHeaders());
+            log.error("Cloud API send failed: code={} status={} reason={}",
+                    code, ex.getStatusCode().value(), reason);
+            // Meta has just told us to slow down. Honour it here rather than at
+            // the call site, so every caller - queue drain, single send, the
+            // barcode batch - backs off without having to remember to.
+            if (code != null && code == 130429) {
+                throttle.pauseFor(Duration.ofSeconds(30));
+            } else if (code != null && code == 80007) {
+                throttle.pauseFor(Duration.ofMinutes(15));
+            } else if (code != null && code == 131057) {
+                throttle.pauseFor(Duration.ofMinutes(1));
+            }
+            return SendResult.failed(reason, code);
         } catch (RestClientException ex) {
             log.error("Cloud API send failed: {}", ex.getMessage());
             return SendResult.failed(ex.getMessage());
+        }
+    }
+
+    /**
+     * What Meta currently allows this number, for the quota gauge.
+     *
+     * <p>{@code messaging_limit_tier} is deprecated in favour of
+     * {@code whatsapp_business_manager_messaging_limit}; both are requested so a
+     * response from either vintage of the API is readable. Note that Meta
+     * publishes the LIMIT and never the CONSUMPTION - there is no field, on this
+     * node or any other, that answers "how many recipients are left today". That
+     * has to be counted locally, which is what {@code WhatsappQuotaService} does.
+     */
+    public NumberState fetchNumberState(String phoneNumberId) {
+        requireConfigured();
+        JsonNode node = json(graph("/" + phoneNumberId
+                + "?fields=quality_rating,status,throughput,"
+                + "whatsapp_business_manager_messaging_limit,messaging_limit_tier"));
+        String label = text(node, "whatsapp_business_manager_messaging_limit");
+        if (label == null) {
+            label = text(node, "messaging_limit_tier");
+        }
+        return new NumberState(
+                label,
+                tierNumber(label),
+                text(node, "quality_rating"),
+                text(node, "status"),
+                text(node.path("throughput"), "level"));
+    }
+
+    /**
+     * What Meta reports about one number's standing.
+     *
+     * @param tierLabel Meta's own wording, kept verbatim - a tier Meta renames
+     *                  should show up as the new name rather than as a stale
+     *                  translation
+     * @param tier      the same thing as a number, or null when the label is one
+     *                  this code has not seen
+     */
+    public record NumberState(String tierLabel, Integer tier, String qualityRating,
+            String status, String throughputLevel) {}
+
+    /**
+     * Meta's tier labels as numbers.
+     *
+     * <p>TIER_UNLIMITED has no number, so it gets a large one rather than null:
+     * every caller here is asking "how many may I still send", and for an
+     * unlimited account the honest answer to that is "more than you have".
+     * Returning null would make the gauge read as unknown when it is in fact the
+     * best possible state.
+     */
+    private static Integer tierNumber(String label) {
+        if (label == null || label.isBlank()) {
+            return null;
+        }
+        String key = label.trim().toUpperCase().replace("TIER_", "");
+        return switch (key) {
+            case "50" -> 50;
+            case "250" -> 250;
+            case "1K", "1000" -> 1_000;
+            case "2K", "2000" -> 2_000;
+            case "10K", "10000" -> 10_000;
+            case "100K", "100000" -> 100_000;
+            case "UNLIMITED" -> Integer.MAX_VALUE;
+            default -> {
+                try {
+                    yield Integer.valueOf(key.replaceAll("[^0-9]", ""));
+                } catch (NumberFormatException ex) {
+                    yield null;
+                }
+            }
+        };
+    }
+
+    /**
+     * Meta reports its own view of how close we are on every single response.
+     *
+     * <p>Reading it is the difference between easing off and being cut off: once
+     * a percentage reaches 100 the calls are throttled outright, and the only way
+     * back is to wait out {@code estimated_time_to_regain_access} - a number that
+     * is only ever delivered in this header. A header that cannot be parsed must
+     * never stop a send, so every failure here is swallowed.
+     */
+    private void applyUsageHeaders(HttpHeaders headers) {
+        if (headers == null) {
+            return;
+        }
+        String usage = headers.getFirst("X-Business-Use-Case-Usage");
+        if (usage == null || usage.isBlank()) {
+            return;
+        }
+        try {
+            JsonNode root = mapper.readTree(usage);
+            root.fields().forEachRemaining(entry -> {
+                for (JsonNode o : entry.getValue()) {
+                    int regain = o.path("estimated_time_to_regain_access").asInt(0);
+                    if (regain > 0) {
+                        log.warn("Meta has throttled us for {} minutes (business {})",
+                                regain, entry.getKey());
+                        throttle.pauseFor(Duration.ofMinutes(regain));
+                        return;
+                    }
+                    int worst = Math.max(o.path("call_count").asInt(0),
+                            Math.max(o.path("total_cputime").asInt(0),
+                                    o.path("total_time").asInt(0)));
+                    if (worst >= 80) {
+                        log.warn("Meta usage at {}% (business {}); easing off", worst,
+                                entry.getKey());
+                        throttle.pauseFor(Duration.ofSeconds(30));
+                    }
+                }
+            });
+        } catch (Exception ignored) {
+            // A header we cannot read is not a reason to fail a message.
+        }
+    }
+
+    /**
+     * Meta's numeric code for a rejection, or null when the body carried none.
+     *
+     * <p>Separate from {@link #describe} because the two answer different
+     * audiences: that one produces the sentence a teacher reads in the log, this
+     * one produces the value the sender branches on.
+     */
+    private Integer errorCode(RestClientResponseException ex) {
+        try {
+            JsonNode code = mapper.readTree(ex.getResponseBodyAsString())
+                    .path("error").path("code");
+            return code.isInt() ? code.asInt() : null;
+        } catch (Exception ignored) {
+            return null;
         }
     }
 

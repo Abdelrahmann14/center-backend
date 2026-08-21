@@ -84,6 +84,18 @@ public class WhatsappMessageLog {
     @Column(name = "failure_code")
     private Integer failureCode;
 
+    /**
+     * The one press of one button that ordered this message.
+     *
+     * <p>A send button no longer sends: it queues a batch and returns, and the
+     * batch may take hours to drain if the daily allowance is spent. This is
+     * what lets the page that started it report progress afterwards, and what
+     * ties a red row in the log back to the run it belonged to. Null on anything
+     * sent before the queue existed, and on single sends nobody batched.
+     */
+    @Column(name = "batch_id")
+    private UUID batchId;
+
     /** SYSTEM | MANUAL. */
     @Column(nullable = false)
     private String source;

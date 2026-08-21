@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -33,6 +34,31 @@ public interface WhatsappMessageLogRepository extends JpaRepository<WhatsappMess
 
     /** Whether one student already got a delivered message for this origin (no lesson scope). */
     boolean existsByStudentIdAndOriginAndStatus(UUID studentId, String origin, String status);
+
+    // ---- clearing the history ----------------------------------------------
+    //
+    // Native and tenant-explicit, like the reporting queries below. @TenantId
+    // filters entity queries; trusting it to also scope a bulk DELETE would put
+    // every other teacher's history one Hibernate detail away from being wiped,
+    // so the workspace is named in the SQL and never inferred.
+    //
+    // The range is read in Cairo days because that is the day the teacher picked
+    // on the calendar - "delete 5 August" must not take an hour of 4 August with
+    // it because the column is stored in UTC. Both ends are inclusive.
+
+    @Modifying
+    @Query(value = """
+            DELETE FROM wa_message_log
+            WHERE admin_id = :adminId
+              AND (created_at AT TIME ZONE 'Africa/Cairo')::date >= CAST(:from AS date)
+              AND (created_at AT TIME ZONE 'Africa/Cairo')::date <= CAST(:to AS date)
+            """, nativeQuery = true)
+    int purgeRange(@Param("adminId") UUID adminId,
+            @Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    @Modifying
+    @Query(value = "DELETE FROM wa_message_log WHERE admin_id = :adminId", nativeQuery = true)
+    int purgeAll(@Param("adminId") UUID adminId);
 
     // ---- usage reporting ---------------------------------------------------
     //

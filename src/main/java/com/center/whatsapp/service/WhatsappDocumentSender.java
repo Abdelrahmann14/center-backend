@@ -55,9 +55,9 @@ public class WhatsappDocumentSender {
         String logBody = caption != null && !caption.isBlank() ? caption : fileName;
 
         if (!creds.configured()) {
-            publish(creds, phone, logBody, purpose, studentId, false, "لم يتم تفعيل رقم واتساب", null, null);
-            throw new BusinessRuleException(
-                    "لم يتم تفعيل رقم واتساب بعد، افتح صفحة الخدمات لمتابعة حالة الأرقام");
+            publish(creds, phone, logBody, purpose, studentId, false, creds.reasonOrDefault(),
+                    null, null);
+            throw new BusinessRuleException(creds.reasonOrDefault());
         }
         sendOfficial(creds, code, phone, content, cacheBustedName(fileName, content), purpose,
                 studentId, vars);

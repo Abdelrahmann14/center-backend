@@ -28,6 +28,17 @@ public class WhatsappConfig {
     @Column(name = "enabled", nullable = false)
     private boolean enabled;
 
+    /**
+     * The teacher's own pause switch, separate from {@link #enabled} above.
+     *
+     * <p>{@code enabled} is the platform's answer to "may this workspace use
+     * WhatsApp at all"; this is the workspace's answer to "is it sending right
+     * now". A teacher pausing their own sending must not look like the super
+     * admin revoking the feature, and neither may overwrite the other.
+     */
+    @Column(name = "sending_enabled", nullable = false)
+    private boolean sendingEnabled = true;
+
     public WhatsappConfig(UUID adminId, boolean enabled) {
         this.adminId = adminId;
         this.enabled = enabled;

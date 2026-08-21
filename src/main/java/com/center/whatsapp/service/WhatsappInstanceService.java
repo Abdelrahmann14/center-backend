@@ -20,6 +20,7 @@ import com.center.whatsapp.dto.WhatsappStatusResponse;
 import com.center.whatsapp.entity.WhatsappInstance;
 import com.center.whatsapp.entity.WhatsappResponsibility;
 import com.center.whatsapp.entity.WhatsappResponsibilityId;
+import com.center.whatsapp.entity.WhatsappConfig;
 import com.center.whatsapp.repository.WhatsappConfigRepository;
 import com.center.whatsapp.repository.WhatsappInstanceRepository;
 import com.center.whatsapp.repository.WhatsappResponsibilityRepository;
@@ -64,7 +65,21 @@ public class WhatsappInstanceService {
      * false means there is nothing to send with and the caller must say so rather
      * than attempt a call that cannot succeed.
      */
-    public record Creds(UUID rowId, String phoneNumberId, String phone, boolean configured) {
+    public record Creds(UUID rowId, String phoneNumberId, String phone, boolean configured,
+            String reason) {
+
+        /**
+         * Why nothing can be sent, for the log row and the toast.
+         *
+         * <p>It is carried rather than re-derived because the callers cannot tell
+         * the cases apart: "no number is connected" and "the teacher paused
+         * sending" both arrive here as {@code configured == false}, and a paused
+         * workspace reading "لم يتم تفعيل رقم واتساب" would go hunting for a
+         * number problem that does not exist.
+         */
+        public String reasonOrDefault() {
+            return reason == null || reason.isBlank() ? "لم يتم تفعيل رقم واتساب" : reason;
+        }
     }
 
     private static boolean isAuthorized(String state) {
@@ -79,6 +94,40 @@ public class WhatsappInstanceService {
     public boolean enabledFor(UUID owner) {
         return owner == null
                 || configRepo.findById(owner).map(c -> c.isEnabled()).orElse(false);
+    }
+
+    /**
+     * Whether the workspace's own master switch is on - the teacher's pause,
+     * not the platform's grant.
+     *
+     * <p>Missing row reads as ON, matching the column default: a workspace that
+     * has never been configured is not "paused", it is not enabled at all, and
+     * {@link #enabledFor} is what says so.
+     */
+    public boolean sendingEnabledFor(UUID owner) {
+        return owner == null
+                || configRepo.findById(owner).map(WhatsappConfig::isSendingEnabled).orElse(true);
+    }
+
+    /** Both switches: the platform allows it AND the workspace has not paused it. */
+    public boolean canSend(UUID owner) {
+        return enabledFor(owner) && sendingEnabledFor(owner);
+    }
+
+    /**
+     * Flips the workspace's own switch.
+     *
+     * <p>Refuses when the platform switch is off: letting a teacher "turn on"
+     * something the super admin has withheld would leave the page claiming a
+     * state the sender does not honour.
+     */
+    @Transactional
+    public void setSending(UUID owner, boolean enabled) {
+        requireEnabled(owner);
+        WhatsappConfig row = configRepo.findById(owner)
+                .orElseGet(() -> new WhatsappConfig(owner, true));
+        row.setSendingEnabled(enabled);
+        configRepo.save(row);
     }
 
     private void requireEnabled(UUID owner) {
@@ -98,11 +147,12 @@ public class WhatsappInstanceService {
     @Transactional(readOnly = true)
     public Creds resolve() {
         UUID scope = TenantContext.get();
-        if (!enabledFor(scope)) {
-            // The super admin turned the feature off for this workspace. Refusing
-            // here rather than at each call site is the whole point: there are a
-            // dozen send paths and only one of them would have remembered to ask.
-            return disabled();
+        if (!canSend(scope)) {
+            // Either the super admin turned the feature off for this workspace or
+            // the teacher paused their own sending. Refusing here rather than at
+            // each call site is the whole point: there are a dozen send paths and
+            // only one of them would have remembered to ask.
+            return disabled(enabledFor(scope) ? PAUSED : null);
         }
         return firstConnected(scope)
                 .or(() -> scope == null ? Optional.empty() : firstConnected(null))
@@ -113,8 +163,8 @@ public class WhatsappInstanceService {
     @Transactional(readOnly = true)
     public Creds resolveFor(String responsibilityCode) {
         UUID scope = TenantContext.get();
-        if (!enabledFor(scope)) {
-            return disabled();
+        if (!canSend(scope)) {
+            return disabled(enabledFor(scope) ? PAUSED : null);
         }
         return assignedNumber(scope, responsibilityCode)
                 .map(WhatsappInstanceService::credsOf)
@@ -149,8 +199,15 @@ public class WhatsappInstanceService {
 
     /** The answer for a workspace with nothing it can send through. */
     private static Creds disabled() {
-        return new Creds(null, null, null, false);
+        return disabled(null);
     }
+
+    private static Creds disabled(String reason) {
+        return new Creds(null, null, null, false, reason);
+    }
+
+    /** Refusal wording for a workspace that switched its own sending off. */
+    static final String PAUSED = "إرسال الواتساب موقوف من صفحة الخدمات";
 
     private Optional<WhatsappInstance> firstConnected(UUID owner) {
         return pool(owner).stream().filter(w -> isAuthorized(w.getState())).findFirst();

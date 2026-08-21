@@ -13,11 +13,16 @@ import java.util.List;
  * ready, quoting {@code blockedReason} instead of inventing its own wording.
  *
  * @param enabled        whether the super admin turned the feature on here
+ * @param sendingEnabled the workspace's OWN master switch. Reported apart from
+ *                       {@code enabled} because the toggle that flips it has to
+ *                       render its own state even while the platform switch is
+ *                       off, and because a teacher's pause is not a revocation
  * @param connectedCount how many of the workspace's numbers can send right now
  * @param types          every message type with its number and readiness
  */
 public record WhatsappAvailabilityResponse(
         boolean enabled,
+        boolean sendingEnabled,
         int connectedCount,
         List<WhatsappResponsibilityResponse> types) {
 

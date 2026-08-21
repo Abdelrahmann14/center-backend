@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.center.whatsapp.dto.WhatsappAvailabilityResponse;
+import com.center.whatsapp.dto.WhatsappSendingRequest;
 import com.center.whatsapp.dto.WhatsappLabelRequest;
 import com.center.whatsapp.dto.WhatsappResponsibilityAssignRequest;
 import com.center.whatsapp.dto.WhatsappResponsibilityResponse;
@@ -74,6 +75,21 @@ public class AdminServicesController {
     @GetMapping("/whatsapp/availability")
     @Operation(summary = "Which WhatsApp actions are available, and through which number")
     public WhatsappAvailabilityResponse availability() {
+        return availability.availability(owner());
+    }
+
+    /**
+     * The workspace's own master switch for sending.
+     *
+     * <p>Returns the whole availability picture rather than an acknowledgement,
+     * because every send button on every screen is driven by it: one response
+     * repaints them all, and a second round trip to find out what just changed
+     * would leave a window where the buttons disagree with the switch.
+     */
+    @PutMapping("/whatsapp/sending")
+    @Operation(summary = "Turn this workspace's WhatsApp sending on or off")
+    public WhatsappAvailabilityResponse setSending(@Valid @RequestBody WhatsappSendingRequest req) {
+        whatsapp.setSending(owner(), req.enabled());
         return availability.availability(owner());
     }
 

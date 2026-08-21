@@ -47,8 +47,22 @@ public class WhatsappLogSender {
     /** One resolved recipient of a message. */
     public record Recipient(String name, String phone, String code, String type, UUID studentId) {}
 
-    /** What one attempt produced, before it is written to the log row. */
-    private record Attempt(boolean sent, String failureReason, String messageId) {}
+    /**
+     * What one attempt produced, before it is written to the log row.
+     *
+     * <p>{@code errorCode} is Meta's number, or null when the refusal came from
+     * this side (no phone, no template, no number configured) and there was
+     * never a call to Meta at all. The distinction matters to the queue: a local
+     * refusal is permanent until a human changes something, while a Meta code
+     * says whether to wait, skip the recipient, or stop the run.
+     */
+    private record Attempt(boolean sent, String failureReason, String messageId,
+            Integer errorCode) {
+
+        static Attempt refused(String reason) {
+            return new Attempt(false, reason, null, null);
+        }
+    }
 
     /**
      * Send {@code body} to one recipient and log the result. {@code lectureId}/
@@ -71,7 +85,49 @@ public class WhatsappLogSender {
     public boolean logAndSend(Recipient recipient, String body, String source, String origin,
             UUID lectureId, UUID groupId, UUID sentByUserId, String sentByName,
             Map<String, String> vars) {
+        return send(recipient, body, source, origin, lectureId, groupId, sentByUserId, sentByName,
+                vars, null).sent();
+    }
+
+    /**
+     * What one send did, in the detail a queue needs.
+     *
+     * <p>{@link #logAndSend} answers a boolean, which is all a synchronous
+     * caller ever wanted: it was going to move to the next recipient either way.
+     * A queue cannot work with that. It has to decide whether to retry this row
+     * in thirty seconds, hold it for a day, drop it forever, or stop the entire
+     * drain - and those four are distinguished only by Meta's numeric code.
+     */
+    public record Delivery(boolean sent, String failureReason, Integer errorCode, UUID logId) {
+
+        /** Wait and try this same row again. */
+        public boolean retryable() {
+            return !sent && errorCode != null && (errorCode == 130429 || errorCode == 131057);
+        }
+
+        /** Hold this recipient, carry on with everyone else. */
+        public boolean recipientBackoff() {
+            return !sent && errorCode != null && (errorCode == 131056 || errorCode == 131049);
+        }
+
+        /** Stop the drain. Sending more makes this worse, not better. */
+        public boolean fatal() {
+            return !sent && errorCode != null && (errorCode == 131048 || errorCode == 368
+                    || errorCode == 80007 || errorCode == 190 || errorCode == 133010);
+        }
+    }
+
+    /**
+     * Send one message and report exactly what happened, for a caller that has
+     * to decide what to do about it.
+     *
+     * <p>{@code batchId} ties the log row back to the press that ordered it.
+     */
+    public Delivery send(Recipient recipient, String body, String source, String origin,
+            UUID lectureId, UUID groupId, UUID sentByUserId, String sentByName,
+            Map<String, String> vars, UUID batchId) {
         WhatsappMessageLog row = new WhatsappMessageLog();
+        row.setBatchId(batchId);
         row.setRecipientName(recipient.name());
         row.setPhone(recipient.phone());
         row.setRecipientCode(recipient.code());
@@ -86,7 +142,8 @@ public class WhatsappLogSender {
         row.setSentByName(sentByName);
 
         Attempt attempt = deliver(recipient, null, null, vars, row);
-        return finish(row, attempt);
+        boolean sent = finish(row, attempt);
+        return new Delivery(sent, attempt.failureReason(), attempt.errorCode(), row.getId());
     }
 
     /**
@@ -134,9 +191,20 @@ public class WhatsappLogSender {
         return new Outcome(attempt.sent(), attempt.failureReason());
     }
 
+    /**
+     * Write the outcome to the log row.
+     *
+     * <p>{@code failure_code} has existed since V83 but only the webhook ever
+     * filled it, and only for failures Meta reported after the fact. A refusal
+     * that came back in the response body carried its code and this method threw
+     * it away, which is why the database could not answer "how many of
+     * yesterday's failures were the rate limit?" - the answer was in the reply
+     * and was never written down.
+     */
     private boolean finish(WhatsappMessageLog row, Attempt attempt) {
         row.setStatus(attempt.sent() ? "SENT" : "FAILED");
         row.setFailureReason(attempt.failureReason());
+        row.setFailureCode(attempt.errorCode());
         row.setWamid(attempt.messageId());
         logRepository.save(row);
         return attempt.sent();
@@ -151,20 +219,20 @@ public class WhatsappLogSender {
     private Attempt deliver(Recipient recipient, byte[] document, String fileName,
             Map<String, String> vars, WhatsappMessageLog row) {
         if (recipient.phone() == null || recipient.phone().isBlank()) {
-            return new Attempt(false, "لا يوجد رقم هاتف للمستلم", null);
+            return Attempt.refused("لا يوجد رقم هاتف للمستلم");
         }
 
         String code = WhatsappResponsibilityCatalog.forOrigin(row.getOrigin());
         Creds creds = instances.resolveFor(code);
         row.setInstanceId(creds.rowId());
         if (!creds.configured()) {
-            return new Attempt(false, "لم يتم تفعيل رقم واتساب", null);
+            return Attempt.refused(creds.reasonOrDefault());
         }
 
         CloudMessageResolver.Resolved template =
                 cloudTemplates.forCode(code, vars, creds.phone()).orElse(null);
         if (template == null) {
-            return new Attempt(false, needsTemplate(code), null);
+            return Attempt.refused(needsTemplate(code));
         }
         row.setTemplateName(template.name());
         row.setTemplateCategory(template.category());
@@ -172,13 +240,13 @@ public class WhatsappLogSender {
         CloudApiClient.HeaderMedia header = null;
         if (document != null && document.length > 0) {
             if (!template.wantsDocument()) {
-                return new Attempt(false,
-                        "القالب المرتبط بهذا النوع لا يحتوي على رأس ملف، فلا يمكنه حمل المرفق", null);
+                return Attempt.refused(
+                        "القالب المرتبط بهذا النوع لا يحتوي على رأس ملف، فلا يمكنه حمل المرفق");
             }
             String mediaId = cloudApiClient.uploadMedia(creds.phoneNumberId(), document, fileName,
                     "application/pdf");
             if (mediaId == null) {
-                return new Attempt(false, "تعذّر رفع الملف إلى واتساب", null);
+                return Attempt.refused("تعذّر رفع الملف إلى واتساب");
             }
             header = new CloudApiClient.HeaderMedia(mediaId, fileName, "document");
         }
@@ -188,7 +256,8 @@ public class WhatsappLogSender {
                 new CloudApiClient.TemplateSpec(template.name(), template.language(),
                         template.params(), header, template.headerParam(),
                         template.urlButtonParam()));
-        return new Attempt(result.sent(), result.failureReason(), result.messageId());
+        return new Attempt(result.sent(), result.failureReason(), result.messageId(),
+                result.errorCode());
     }
 
     /**

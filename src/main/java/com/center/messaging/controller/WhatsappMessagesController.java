@@ -1,21 +1,27 @@
 package com.center.messaging.controller;
 
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.center.auth.security.AuthenticatedUser;
+import com.center.common.exception.BusinessRuleException;
 import com.center.messaging.dto.AttendanceOptinRequest;
 import com.center.messaging.dto.AttendanceOptinResponse;
 import com.center.messaging.dto.LectureAbsentee;
@@ -52,6 +58,30 @@ public class WhatsappMessagesController {
     @GetMapping("/log")
     public Page<WhatsappMessageLogResponse> log(Pageable pageable) {
         return service.log(pageable);
+    }
+
+    /**
+     * Clears the send history: one date range, or all of it.
+     *
+     * <p>ADMIN only, unlike reading the log. A receptionist who may send is not
+     * thereby someone who may erase the record of what was sent.
+     *
+     * @param from first day to delete (Cairo date, inclusive). Omit BOTH ends to
+     *             clear everything - a half-given range is rejected rather than
+     *             guessed, since guessing wrong here deletes the wrong years.
+     */
+    @DeleteMapping("/log")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Map<String, Integer> clearLog(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        if ((from == null) != (to == null)) {
+            throw new BusinessRuleException("حدّد بداية ونهاية المدة، أو اترك الاثنين فارغين لحذف السجل كله");
+        }
+        if (from != null && from.isAfter(to)) {
+            throw new BusinessRuleException("تاريخ البداية بعد تاريخ النهاية");
+        }
+        return Map.of("deleted", service.clearLog(from, to));
     }
 
     // ── Per-lesson attendance / absence (Lessons page) ────────────────────

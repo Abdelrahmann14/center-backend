@@ -1,5 +1,6 @@
 package com.center.messaging.service;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -60,6 +61,7 @@ import com.center.whatsapp.service.WhatsappInstanceService;
 import com.center.whatsapp.service.WhatsappResponsibilityCatalog;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * The Messages page's server side: the automated-message config (attendance /
@@ -68,6 +70,7 @@ import lombok.RequiredArgsConstructor;
  * All WhatsApp only - nothing here touches the in-app notification inbox.
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class WhatsappMessagingService {
 
@@ -1002,6 +1005,30 @@ public class WhatsappMessagingService {
         }
         return logRepository.findAllByOrderByCreatedAtDesc(pageable)
                 .map(m -> toLogResponse(m, names));
+    }
+
+    /**
+     * Deletes this workspace's send history, all of it or one date range.
+     *
+     * <p>Irreversible and deliberately so - the point of the button is to get rid
+     * of the rows, not to hide them. It touches ONLY the history: the messages
+     * were already delivered, and nothing else reads these rows except the
+     * "already messaged about this lesson" checks, which will simply stop
+     * recognising the cleared period and allow a resend.
+     *
+     * @param from first day to delete, in Cairo dates; null with {@code to} null
+     *             means everything
+     * @return how many rows went
+     */
+    @Transactional
+    public int clearLog(LocalDate from, LocalDate to) {
+        UUID admin = adminId();
+        int gone = from == null || to == null
+                ? logRepository.purgeAll(admin)
+                : logRepository.purgeRange(admin, from, to);
+        log.info("whatsapp log cleared [{}]: {} rows ({})", admin, gone,
+                from == null || to == null ? "all" : from + ".." + to);
+        return gone;
     }
 
     private static WhatsappMessageLogResponse toLogResponse(WhatsappMessageLog m,

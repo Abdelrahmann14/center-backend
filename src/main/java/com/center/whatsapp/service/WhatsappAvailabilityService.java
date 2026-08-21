@@ -57,6 +57,7 @@ public class WhatsappAvailabilityService {
     @Transactional(readOnly = true)
     public WhatsappAvailabilityResponse availability(UUID owner) {
         boolean enabled = instances.enabledFor(owner);
+        boolean sending = instances.sendingEnabledFor(owner);
         List<WhatsappInstance> pool = enabled ? instances.numbers(owner) : List.of();
         long connected = pool.stream()
                 .filter(w -> "authorized".equalsIgnoreCase(w.getState()))
@@ -64,17 +65,19 @@ public class WhatsappAvailabilityService {
 
         return new WhatsappAvailabilityResponse(
                 enabled,
+                sending,
                 (int) connected,
-                messageTypes(owner, enabled));
+                messageTypes(owner, enabled, sending));
     }
 
     /** Every message type, resolved to the number and template that will carry it. */
     @Transactional(readOnly = true)
     public List<WhatsappResponsibilityResponse> messageTypes(UUID owner) {
-        return messageTypes(owner, instances.enabledFor(owner));
+        return messageTypes(owner, instances.enabledFor(owner), instances.sendingEnabledFor(owner));
     }
 
-    private List<WhatsappResponsibilityResponse> messageTypes(UUID owner, boolean enabled) {
+    private List<WhatsappResponsibilityResponse> messageTypes(UUID owner, boolean enabled,
+            boolean sending) {
         Map<String, UUID> chosen = instances.assignments(owner);
         Map<String, WhatsappTypeTemplate> mapped = templateMapping(owner);
 
@@ -86,7 +89,7 @@ public class WhatsappAvailabilityService {
                     .flatMap(row -> templates.findById(row.getTemplateId()))
                     .orElse(null);
 
-            String blocked = blockedReason(enabled, number, template, r);
+            String blocked = blockedReason(enabled, sending, number, template, r);
 
             out.add(new WhatsappResponsibilityResponse(
                     r.code(),
@@ -105,10 +108,17 @@ public class WhatsappAvailabilityService {
     }
 
     /** Why a type cannot be sent, or null when it can. */
-    private static String blockedReason(boolean enabled, WhatsappInstance number,
+    private static String blockedReason(boolean enabled, boolean sending, WhatsappInstance number,
             WhatsappCloudTemplate template, Responsibility r) {
         if (!enabled) {
             return "ميزة واتساب غير مُفعّلة لهذا الحساب";
+        }
+        // Checked before the number and the template deliberately. A paused
+        // workspace usually has both, and reporting "لا يوجد رقم" to someone who
+        // can see their own connected number reads as a bug rather than a switch
+        // they themselves flipped.
+        if (!sending) {
+            return "إرسال الواتساب موقوف — فعّله من صفحة الخدمات";
         }
         if (number == null) {
             return "لا يوجد رقم واتساب مُفعّل";
