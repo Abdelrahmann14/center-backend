@@ -95,8 +95,18 @@ public final class ModuleCatalog {
             // The Messages page (WhatsApp). Reuses the NOTIFICATIONS code so the sync
             // runner updates the existing row in place instead of stranding it. Now
             // delegatable, so an admin may hand sending to an assistant.
-            new ModuleDef("NOTIFICATIONS", "الرسائل", "رسائل واتساب: إرسال يدوي، رسائل تلقائية، وسجل", "workspace", true, true, true, 46, List.of(
-                    p("NOTIFICATION_SEND", "SEND", "إرسال رسائل واتساب", 0))),
+            //
+            // Three permissions, because they are three different amounts of trust
+            // and one code could not tell them apart. Sending is a daily job at the
+            // desk. READING the log is knowing every number and every message the
+            // workspace has ever sent, which is a lot to hand somebody who only
+            // needs to press "attendance". And ERASING it removes the only record
+            // of what went out - a receptionist who may send is not thereby
+            // somebody who may destroy the evidence of sending.
+            new ModuleDef("NOTIFICATIONS", "الرسائل", "محادثات واتساب، الإرسال، وسجل الرسائل", "workspace", true, true, true, 46, List.of(
+                    p("NOTIFICATION_SEND", "SEND", "إرسال رسائل واتساب والرد على المحادثات", 0),
+                    p("NOTIFICATION_LOG_VIEW", "VIEW", "عرض سجل الرسائل", 1),
+                    p("NOTIFICATION_LOG_DELETE", "DELETE", "مسح سجل الرسائل", 2))),
             // ── Admin-only (not delegatable). The admin holds these; they never
             //    appear in the assistant grant editor, and no assistant can get
             //    them: ANALYTICS, GROUPS, ASSISTANTS. ──
