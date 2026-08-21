@@ -284,6 +284,6 @@ public class WhatsappLogSender {
         WhatsappResponsibilityCatalog.Responsibility r =
                 WhatsappResponsibilityCatalog.find(code);
         String label = r == null ? code : r.label();
-        return "لا توجد رسالة مثبتة لـ«" + label + "» — اربطها بقالب معتمد من الخدمات ← الرسائل";
+        return "لا توجد رسالة مثبتة لـ«" + label + "» — اربطها بقالب معتمد من الخدمات ← القوالب";
     }
 }

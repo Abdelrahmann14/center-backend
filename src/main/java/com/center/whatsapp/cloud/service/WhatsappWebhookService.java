@@ -42,6 +42,7 @@ public class WhatsappWebhookService {
     private final JdbcTemplate jdbc;
     private final CloudTemplateService templates;
     private final com.center.whatsapp.quota.WhatsappQuotaService quota;
+    private final com.center.whatsapp.inbox.WhatsappInboxService inbox;
 
     /**
      * Whether {@code signature} is Meta's HMAC of exactly this body, using the app
@@ -128,14 +129,17 @@ public class WhatsappWebhookService {
                         failureReason(status), failureCode(status), wamid);
                 default -> log.debug("Ignoring message status {}", state);
             }
+            // The same receipt, applied to the conversation view. A reply sent
+            // from «الرسائل» is not in wa_message_log at all - a service message
+            // is free, uncounted, and belongs to its thread rather than to the
+            // campaign history - so its ticks would never move without this.
+            inbox.applyStatus(wamid, state, at, failureCode(status), failureReason(status));
         }
 
-        // An inbound message opens the 24-hour window in which free-form replies
-        // are allowed. Nothing acts on that yet; logging it keeps the arrival
-        // visible while the reply side is built.
-        for (JsonNode message : value.path("messages")) {
-            log.info("Inbound WhatsApp message from {}", message.path("from").asText("?"));
-        }
+        // An inbound message is both a message somebody has to answer and the
+        // event that opens the 24-hour window in which a free-form answer is
+        // allowed at all. Both are the inbox's business.
+        inbox.ingest(value);
     }
 
     /**

@@ -496,6 +496,85 @@ public class CloudApiClient {
         }
     }
 
+    /** An inbound file, fetched from Meta. */
+    public record Media(byte[] content, String mime, String fileName) {}
+
+    /**
+     * Downloads an inbound file by the media id the webhook carried.
+     *
+     * <p>Two round trips, because Meta will not hand out a stable link: the
+     * first returns a URL that expires within minutes, the second fetches it -
+     * and that second call still needs the bearer token, even though the URL is
+     * on a different host. Omitting the token there returns 401 with an HTML
+     * body, which is the single most common way this call is got wrong.
+     *
+     * <p>Meta keeps an inbound file for 30 days. After that this returns null,
+     * which is not an error: the message stays in the thread and says the file
+     * is no longer available at WhatsApp.
+     *
+     * @return the bytes, or null when Meta no longer has them
+     */
+    public Media downloadMedia(String mediaId) {
+        requireConfigured();
+        if (mediaId == null || mediaId.isBlank()) {
+            return null;
+        }
+        JsonNode meta;
+        try {
+            meta = json(graph("/" + mediaId));
+        } catch (RuntimeException ex) {
+            log.warn("Cloud API media lookup failed for {}: {}", mediaId, ex.getMessage());
+            return null;
+        }
+        String url = text(meta, "url");
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        String mime = text(meta, "mime_type");
+        try {
+            byte[] content = rest.get()
+                    .uri(url)
+                    // The lookaside host is NOT graph.facebook.com and still
+                    // demands the same bearer token.
+                    .headers(this::auth)
+                    .retrieve()
+                    .body(byte[].class);
+            if (content == null || content.length == 0) {
+                return null;
+            }
+            return new Media(content, mime, text(meta, "file_name"));
+        } catch (RestClientException ex) {
+            log.warn("Cloud API media download failed for {}: {}", mediaId, ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Puts the blue ticks on a message the customer sent us.
+     *
+     * <p>Best effort on purpose. It is a courtesy to the person waiting, and a
+     * failure here must never stop a thread from opening - so it is logged and
+     * swallowed rather than thrown.
+     */
+    public void markRead(String phoneNumberId, String wamid) {
+        if (!properties.meta().configured() || phoneNumberId == null || wamid == null) {
+            return;
+        }
+        try {
+            rest.post()
+                    .uri(graph("/" + phoneNumberId + "/messages"))
+                    .headers(this::auth)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("messaging_product", "whatsapp",
+                            "status", "read",
+                            "message_id", wamid))
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientException ex) {
+            log.debug("Could not mark {} as read: {}", wamid, ex.getMessage());
+        }
+    }
+
     // ---- provisioning a number ---------------------------------------------
 
     /**
