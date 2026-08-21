@@ -58,6 +58,16 @@ public class User extends BaseEntity {
     private String phone;
 
     /**
+     * The number a message template prints for parents to call back on.
+     *
+     * <p>Separate from {@link #phone} on purpose: that one is personal - it is
+     * what the profile shows and where the invoices go - and a template that
+     * quoted it would hand it to every parent the system writes to.
+     */
+    @Column(name = "office_phone")
+    private String officePhone;
+
+    /**
      * A deactivated account is refused at login but its data is kept. When an
      * Admin is inactive, its whole workspace is locked out (assistants are
      * refused because their owning Admin is inactive).
@@ -72,4 +82,19 @@ public class User extends BaseEntity {
     /** MIME type of {@link #photoData}, e.g. {@code image/png}. */
     @Column(name = "photo_type")
     private String photoType;
+
+    /**
+     * Does adding a student from this account send them their barcode card at
+     * once.
+     *
+     * <p>Per account and not per workspace, deliberately: the assistant entering
+     * a walk-in wants the card to leave with the student, and the one importing
+     * last year's roster does not. A shared setting would make each of them turn
+     * the other's off.
+     *
+     * <p>Off for a new account, so nothing is ever sent by an account whose owner
+     * has not asked for it.
+     */
+    @Column(name = "barcode_auto_send", nullable = false)
+    private boolean barcodeAutoSend = false;
 }

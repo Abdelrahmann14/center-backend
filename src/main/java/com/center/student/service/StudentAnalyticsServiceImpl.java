@@ -7,7 +7,6 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +20,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.center.common.enums.RegistrationStatus;
 import com.center.common.exception.ResourceNotFoundException;
-import com.center.exam.repository.ExamAttemptRepository;
 import com.center.group.entity.Group;
 import com.center.registration.entity.Registration;
 import com.center.registration.repository.RegistrationRepository;
@@ -51,7 +49,6 @@ public class StudentAnalyticsServiceImpl implements StudentAnalyticsService {
 
     private final StudentRepository studentRepository;
     private final RegistrationRepository registrationRepository;
-    private final ExamAttemptRepository examAttemptRepository;
 
     private static final StudentAnalyticsResponse EMPTY =
             new StudentAnalyticsResponse(false, null, List.of());
@@ -72,16 +69,12 @@ public class StudentAnalyticsServiceImpl implements StudentAnalyticsService {
         }
 
         OffsetDateTime firstAt = attended.get(0).getCreatedAt();
-        Map<UUID, ExamAttemptRepository.LectureScoreRow> onlineScores = new HashMap<>();
-        for (ExamAttemptRepository.LectureScoreRow row : examAttemptRepository.findLectureScores(studentId)) {
-            onlineScores.put(row.getLectureId(), row);
-        }
 
         List<Entry> timeline = new ArrayList<>();
         Set<UUID> attendedLectures = new LinkedHashSet<>();
         for (Registration r : attended) {
             attendedLectures.add(r.getLecture().getId());
-            timeline.add(attendedEntry(r, onlineScores.get(r.getLecture().getId())));
+            timeline.add(attendedEntry(r));
         }
 
         // Every group this student has ever registered under, so a student who
@@ -112,19 +105,13 @@ public class StudentAnalyticsServiceImpl implements StudentAnalyticsService {
                 : registrationRepository.findGroupLessonsSince(groupIds, RegistrationStatus.PRESENT, since);
     }
 
-    private Entry attendedEntry(Registration r, ExamAttemptRepository.LectureScoreRow online) {
-        // The online attempt is authoritative when it exists (it carries its own
-        // max); otherwise fall back to the score typed on the paper register.
+    private Entry attendedEntry(Registration r) {
+        // The score typed on the lesson register is the only one there is.
         BigDecimal score = null;
         BigDecimal max = null;
         String examName = r.getLecture().getExamName();
         boolean taken = false;
-        if (online != null && "submitted".equals(online.getStatus())) {
-            score = sum(online.getScore(), online.getBonusScore());
-            max = online.getMaxScore();
-            examName = online.getExamName() != null ? online.getExamName() : examName;
-            taken = true;
-        } else if (r.getExamScore() != null) {
+        if (r.getExamScore() != null) {
             score = r.getExamScore();
             max = parseMax(r.getLecture().getExamGrade());
             taken = true;
@@ -201,14 +188,10 @@ public class StudentAnalyticsServiceImpl implements StudentAnalyticsService {
         String day = g.getDayOfWeek() >= 0 && g.getDayOfWeek() < DAY_NAMES.length
                 ? DAY_NAMES[g.getDayOfWeek()]
                 : "";
-        return "%s · %s · %s".formatted(day, g.getStartTime(), g.getCenterName());
-    }
-
-    private static BigDecimal sum(BigDecimal a, BigDecimal b) {
-        if (a == null) {
-            return b;
-        }
-        return b == null ? a : a.add(b);
+        // getStartTime() straight into a string prints "16:00:00" - the machine's
+        // spelling, in a label a teacher reads.
+        return "%s · %s · %s".formatted(day,
+                com.center.common.util.ArabicFormat.time(g.getStartTime()), g.getCenterName());
     }
 
     private static BigDecimal parseMax(String examGrade) {

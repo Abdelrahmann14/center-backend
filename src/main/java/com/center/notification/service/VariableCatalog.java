@@ -42,9 +42,9 @@ public final class VariableCatalog {
     public static final List<Variable> ALL = List.of(
             // ── Date & time ────────────────────────────────────────────────
             new Variable("date", "تاريخ اليوم", "تاريخ إرسال الرسالة", G_TIME, "٢٠٢٦-٠٨-١٦"),
-            new Variable("time", "وقت الإرسال", "الساعة التي أُرسلت فيها الرسالة", G_TIME, "١٦:٣٠"),
+            new Variable("time", "وقت الإرسال", "الساعة التي أُرسلت فيها الرسالة", G_TIME, "٤:٣٠ م"),
             new Variable("day", "اسم اليوم", "اليوم الذي أُرسلت فيه الرسالة", G_TIME, "الأحد"),
-            new Variable("now", "التاريخ والوقت", "التاريخ والساعة معاً", G_TIME, "٢٠٢٦-٠٨-١٦ ١٦:٣٠"),
+            new Variable("now", "التاريخ والوقت", "التاريخ والساعة معاً", G_TIME, "٢٠٢٦-٠٨-١٦ ٤:٣٠ م"),
 
             // ── Student ────────────────────────────────────────────────────
             new Variable("student.name", "اسم الطالب", "اسم الطالب كاملاً", G_STUDENT, "أحمد محمد علي حسن"),
@@ -63,19 +63,22 @@ public final class VariableCatalog {
             new Variable("parent.phone", "هاتف ولي الأمر", "أول رقم مسجّل لولي الأمر", G_PARENT, "01087654321"),
 
             // ── Lesson & group ─────────────────────────────────────────────
-            new Variable("group", "المجموعة", "مجموعة الطالب كاملة", G_LESSON, "السبت ١٦:٠٠ - المركز"),
+            new Variable("group", "المجموعة", "مجموعة الطالب كاملة", G_LESSON, "السبت ٤ م - المركز"),
             new Variable("group.day", "يوم المجموعة", "يوم انعقاد المجموعة", G_LESSON, "السبت"),
-            new Variable("group.time", "ميعاد المجموعة", "ساعة بداية المجموعة", G_LESSON, "١٦:٠٠"),
+            new Variable("group.time", "ميعاد المجموعة", "ساعة بداية المجموعة", G_LESSON, "٤ م"),
             new Variable("center.name", "اسم السنتر", "السنتر الذي تُعقد فيه المجموعة", G_LESSON, "سنتر النور"),
             new Variable("lesson.name", "اسم الحصة", "عنوان الحصة", G_LESSON, "حصة الوحدة الأولى"),
             new Variable("lesson.homework", "واجب الحصة", "الواجب المطلوب في هذه الحصة", G_LESSON, "مسائل ص ٣٢"),
+            new Variable("lesson.date", "تاريخ الحصة", "اليوم الذي عُقدت فيه الحصة", G_LESSON, "٢٠٢٦-٠٨-١٦"),
 
             // ── Attendance ─────────────────────────────────────────────────
             new Variable("attendance.status", "حالة الحضور", "حاضر أو غائب", G_ATTENDANCE, "حاضر"),
+            new Variable("absence.date", "تاريخ الغياب", "يوم الحصة التي تغيّب عنها الطالب",
+                    G_ATTENDANCE, "٢٠٢٦-٠٨-١٦"),
             new Variable("attendance.date", "تاريخ الحضور", "اليوم الذي حضر فيه الطالب", G_ATTENDANCE, "٢٠٢٦-٠٨-١٦"),
-            new Variable("attendance.time", "وقت الحضور", "ساعة تسجيل الحضور", G_ATTENDANCE, "١٦:٠٣"),
+            new Variable("attendance.time", "وقت الحضور", "ساعة تسجيل الحضور", G_ATTENDANCE, "٤:٠٣ م"),
             new Variable("attendance.time_exact", "وقت الحضور بالثانية",
-                    "لحظة تسجيل الحضور بالضبط، بالثواني", G_ATTENDANCE, "١٦:٠٣:٢٧"),
+                    "لحظة تسجيل الحضور بالضبط، بالثواني", G_ATTENDANCE, "٤:٠٣:٢٧ م"),
             new Variable("homework.status", "حالة الواجب", "حل الواجب أو لم يحله", G_ATTENDANCE, "لم يحل الواجب"),
 
             // ── Exam ───────────────────────────────────────────────────────
@@ -86,7 +89,10 @@ public final class VariableCatalog {
 
             // ── Teacher ────────────────────────────────────────────────────
             new Variable("teacher.name", "اسم المدرّس", "صاحب المركز الذي تُرسل الرسالة باسمه", G_TEACHER, "أ. خالد"),
-            new Variable("sender", "اسم المُرسِل", "الاسم الظاهر في توقيع الرسالة", G_TEACHER, "أ. خالد"));
+            new Variable("sender", "اسم المُرسِل", "الاسم الظاهر في توقيع الرسالة", G_TEACHER, "أ. خالد"),
+            new Variable("teacher.office_phone", "رقم مكتب المدرّس",
+                    "الرقم الذي يتواصل عليه أولياء الأمور، غير رقم المدرّس الشخصي",
+                    G_TEACHER, "01012345678"));
 
     public static List<String> keys() {
         return ALL.stream().map(Variable::key).toList();

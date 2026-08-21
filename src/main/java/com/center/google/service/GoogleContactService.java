@@ -134,7 +134,7 @@ public class GoogleContactService {
         Map<UUID, GradeContactMark> byGrade = markRepo.findByAdminId(adminId).stream()
                 .collect(Collectors.toMap(GradeContactMark::getGradeId, m -> m, (a, b) -> a));
         List<GoogleMarkResponse> out = new java.util.ArrayList<>();
-        for (Grade g : gradeRepo.findAllByOrderByCreatedAtAsc()) {
+        for (Grade g : gradeRepo.findAllByOrderBySortOrderAscNameAsc()) {
             GradeContactMark m = byGrade.get(g.getId());
             out.add(new GoogleMarkResponse(g.getId(), g.getName(), g.isActive(),
                     m == null ? null : m.getStudentMark(),

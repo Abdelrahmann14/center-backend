@@ -10,15 +10,7 @@ public enum Role implements PersistableEnum {
     /** A teacher. Root of one isolated workspace. */
     ADMIN("admin"),
     /** An assistant. Belongs to exactly one admin's workspace. */
-    USER("user"),
-    /** A student. Belongs to one admin; used by the mobile app (future). */
-    STUDENT("student"),
-    /**
-     * A guardian. Links to one or more students (possibly across workspaces),
-     * so it owns no workspace of its own - admin_id stays NULL, like a root.
-     * Created inactive and only enabled once a student approves the link.
-     */
-    PARENT("parent");
+    USER("user");
 
     /** Spring Security expects authorities to carry the ROLE_ prefix. */
     public static final String AUTHORITY_PREFIX = "ROLE_";

@@ -29,8 +29,6 @@ import com.center.student.dto.StudentDuplicateResponse;
 import com.center.student.dto.StudentOptionsResponse;
 import com.center.student.dto.StudentResponse;
 import com.center.student.service.StudentService;
-import com.center.whatsapp.dto.WhatsappCheckResponse;
-import com.center.whatsapp.service.WhatsappNumberService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -44,19 +42,6 @@ import lombok.RequiredArgsConstructor;
 public class StudentController {
 
     private final StudentService studentService;
-    private final WhatsappNumberService whatsappNumbers;
-
-    /**
-     * The admin app's WhatsApp check. Unlike the public {@code /register} one it
-     * is workspace-scoped and remembered, so a number is asked about once and
-     * every later form - and every student sharing that phone - reuses it.
-     */
-    @GetMapping("/check-whatsapp")
-    @PreAuthorize("hasAnyAuthority('PERM_STUDENT_VIEW','PERM_REGISTRATION_ACCESS')")
-    @Operation(summary = "Whether a phone is on WhatsApp (remembered per workspace)")
-    public WhatsappCheckResponse checkWhatsapp(@RequestParam("phone") String phone) {
-        return whatsappNumbers.lookup(phone);
-    }
 
     @GetMapping
     @PreAuthorize("hasAnyAuthority('PERM_STUDENT_VIEW','PERM_REGISTRATION_ACCESS')")

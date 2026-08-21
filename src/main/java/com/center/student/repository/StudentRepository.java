@@ -34,28 +34,8 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
 
     boolean existsByNameAndIdNot(String name, UUID id);
 
-    /** The student record for a claimed login account, within the current tenant. */
-    Optional<Student> findByUserId(UUID userId);
-
     /** Active students assigned to a group - the audience of a scheduled exam. */
     List<Student> findByGroup_IdAndActiveTrue(UUID groupId);
-
-    /**
-     * Active students assigned to a group who did not attend ANY lesson within the
-     * given week - the audience of the weekly absence message. Both Student and
-     * Attendance are @TenantId, so under a bound tenant this stays scoped to the
-     * one workspace.
-     */
-    @Query("""
-            SELECT s FROM Student s
-            WHERE s.active = true AND s.group IS NOT NULL
-              AND NOT EXISTS (
-                SELECT 1 FROM Attendance a
-                WHERE a.studentId = s.id AND a.attendedOn BETWEEN :start AND :end
-              )
-            """)
-    List<Student> findWeeklyAbsentees(@Param("start") java.time.LocalDate start,
-            @Param("end") java.time.LocalDate end);
 
     // JPQL: Hibernate's @TenantId scopes these to the current workspace, so the
     // form only ever suggests this admin's own schools/cities.
@@ -81,27 +61,63 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
             nativeQuery = true)
     int findMaxSerial(UUID adminId);
 
+    /**
+     * Every distinct number on this workspace's roster, students and guardians
+     * together.
+     *
+     * <p>Read by the WhatsApp number check, which is asked "which of these do we
+     * not know about yet". The browser holds these numbers too, but shipping
+     * hundreds of them up to be told which are unknown is a payload for nothing -
+     * the question is entirely answerable server-side.
+     */
+    @Query(value = """
+            SELECT DISTINCT btrim(p)
+            FROM students s, unnest(s.student_phones || s.parent_phones) p
+            WHERE s.admin_id = :adminId AND btrim(p) <> ''
+            """, nativeQuery = true)
+    List<String> allPhones(@Param("adminId") UUID adminId);
+
+    // ---- barcode card ------------------------------------------------------
+    //
+    // "Everyone who never got their card" is the resend button's whole audience,
+    // and it is deliberately narrower than "barcode_sent_at is null": a blocked
+    // student is not being taught, and a student with no number of their own has
+    // nowhere to receive it. Including either would make the button report work
+    // it can never finish, and would write a failed log row per student per
+    // press. Native SQL because the phone test needs unnest(); the workspace is
+    // therefore filtered explicitly, since @TenantId does not reach a native
+    // query.
+
+    String PENDING_BARCODE_WHERE = """
+            WHERE admin_id = :adminId
+              AND is_active
+              AND barcode_sent_at IS NULL
+              AND EXISTS (SELECT 1 FROM unnest(student_phones) p WHERE btrim(p) <> '')
+            """;
+
+    @Query(value = "SELECT count(*) FROM students " + PENDING_BARCODE_WHERE, nativeQuery = true)
+    long countPendingBarcode(@Param("adminId") UUID adminId);
+
+    /** The next batch to send to, oldest student code first. */
+    @Query(value = "SELECT id FROM students " + PENDING_BARCODE_WHERE
+            + " ORDER BY serial LIMIT :limit", nativeQuery = true)
+    List<UUID> findPendingBarcodeIds(@Param("adminId") UUID adminId, @Param("limit") int limit);
+
+    /**
+     * Record that the card reached this student, keeping the FIRST instant: the
+     * {@code IS NULL} guard is what makes a later manual resend leave the
+     * original date alone. @TenantId scopes it to the workspace.
+     */
+    @Modifying
+    @Query("UPDATE Student s SET s.barcodeSentAt = :at WHERE s.id = :id AND s.barcodeSentAt IS NULL")
+    int markBarcodeSent(@Param("id") UUID id, @Param("at") java.time.OffsetDateTime at);
+
     /** Just enough to locate a student and the workspace that owns them. */
     interface StudentIdentity {
         UUID getId();
 
         UUID getAdminId();
     }
-
-    /**
-     * Find a student by their code, across every workspace.
-     *
-     * <p>Native on purpose: public self-registration runs with no tenant bound,
-     * so the @TenantId filter would hide every row. The owning workspace is
-     * returned so the caller can continue scoped to it.
-     */
-    @Query(value = "SELECT id AS id, admin_id AS adminId FROM students WHERE serial = :serial",
-            nativeQuery = true)
-    Optional<StudentIdentity> findIdentityBySerial(@Param("serial") int serial);
-
-    /** The owning workspace of a student by id, ignoring the tenant filter. */
-    @Query(value = "SELECT admin_id FROM students WHERE id = :id", nativeQuery = true)
-    Optional<UUID> findAdminIdById(@Param("id") UUID id);
 
     /** A roster row reduced to what the Google reconciler actually reads. */
     interface RosterRow {
@@ -133,21 +149,6 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
     @Query(value = "SELECT EXISTS (SELECT 1 FROM students WHERE lower(name) = lower(:name))",
             nativeQuery = true)
     boolean nameExistsAnywhere(@Param("name") String name);
-
-    /**
-     * True when ANY workspace already registered this number as a STUDENT phone.
-     * A student's own number identifies them, so it must be unique platform-wide
-     * - parent numbers are deliberately not checked, since siblings share one.
-     *
-     * <p>Native: array containment, and self-registration runs with no tenant
-     * bound, so the check must see past the discriminator filter.
-     */
-    @Query(value = """
-            SELECT EXISTS (
-              SELECT 1 FROM students WHERE student_phones @> ARRAY[cast(:phone AS text)]
-            )
-            """, nativeQuery = true)
-    boolean studentPhoneExistsAnywhere(@Param("phone") String phone);
 
     /**
      * True when any OTHER student already owns one of these phone numbers.

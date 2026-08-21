@@ -14,14 +14,12 @@ import com.center.common.exception.BusinessRuleException;
 /**
  * Every account signs in with an email. The user only ever types the part BEFORE
  * the domain; the domain is derived from their role and appended by the server,
- * so a student can never mint an admin address.
+ * so an assistant can never mint an admin address.
  */
 public final class EmailPolicy {
 
-    public static final String STUDENT_DOMAIN = "@center.student.com";
     public static final String ADMIN_DOMAIN = "@center.admin.com";
     public static final String ASSISTANT_DOMAIN = "@center.assistant.com";
-    public static final String PARENT_DOMAIN = "@center.parent.com";
 
     /** English letters and digits only - no spaces, no underscores, no symbols. */
     private static final Pattern LOCAL_PART = Pattern.compile("^[A-Za-z0-9]+$");
@@ -40,8 +38,6 @@ public final class EmailPolicy {
 
     public static String domainFor(Role role) {
         return switch (role) {
-            case STUDENT -> STUDENT_DOMAIN;
-            case PARENT -> PARENT_DOMAIN;
             case USER -> ASSISTANT_DOMAIN;
             case ADMIN, SUPER_ADMIN -> ADMIN_DOMAIN;
         };

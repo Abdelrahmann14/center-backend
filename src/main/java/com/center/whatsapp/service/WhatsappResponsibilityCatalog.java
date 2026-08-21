@@ -1,6 +1,7 @@
 package com.center.whatsapp.service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -8,33 +9,83 @@ import java.util.Set;
  * Each purpose is assigned to at most one number (see {@code whatsapp_responsibility});
  * at send time the assigned - and connected - number is used, with automatic
  * failover to a backup number if it drops.
+ *
+ * <p>Every entry is a message a teacher recognises and chooses a number for:
+ * attendance, absence, exam grade, report, barcode, and whatever they write by
+ * hand. There is no hidden plumbing left - the verification codes, password
+ * resets and guardian-link notices that used to sit here belonged to the mobile
+ * app's own accounts, and went with them.
+ *
+ * <p>{@link #forOrigin} is the bridge from the message log's {@code origin} to a
+ * code here. Every send in the messaging feature carries an origin, and routing
+ * by it is what makes "الحضور من رقم والغياب من رقم آخر" a real setting instead
+ * of a label - before this, every message left through {@code broadcast}.
  */
 public final class WhatsappResponsibilityCatalog {
 
-    public record Responsibility(String code, String label, String description) {
+    /**
+     * @param carriesFile whether this message ships a PDF, which means its
+     *                    template needs a DOCUMENT header
+     */
+    public record Responsibility(String code, String label, String description,
+            boolean carriesFile) {
     }
 
+    public static final String ATTENDANCE = "attendance";
+    public static final String ABSENCE = "absence";
+    public static final String EXAM = "exam_result";
+    public static final String REPORT = "report";
+    public static final String BARCODE = "barcode";
+
+    /** Anything the teacher writes and sends by hand, plus the broadcast screen. */
+    public static final String BROADCAST = "broadcast";
+
     public static final List<Responsibility> ALL = List.of(
-            new Responsibility("student_verification", "رمز تحقق تسجيل الطالب",
-                    "يُرسَل رمز التحقق عند إنشاء الطالب لحساب جديد."),
-            new Responsibility("student_password_reset", "إعادة تعيين كلمة مرور الطالب",
-                    "يُرسَل رمز إعادة تعيين كلمة المرور لحساب الطالب."),
-            new Responsibility("parent_password_reset", "إعادة تعيين كلمة مرور ولي الأمر",
-                    "يُرسَل رمز إعادة تعيين كلمة المرور لحساب ولي الأمر."),
-            new Responsibility("parent_link_approved_wa", "تأكيد ربط ولي الأمر",
-                    "يُرسَل لولي الأمر عند قبول ربط حسابه بالطالب."),
-            new Responsibility("parent_link_rejected_wa", "رفض ربط ولي الأمر",
-                    "يُرسَل لولي الأمر عند تعذّر التحقق من صلته بالطالب."),
-            new Responsibility("exam_result", "إرسال نتيجة الاختبار لولي الأمر",
-                    "يُرسَل لولي الأمر نتيجة الطالب بعد كل اختبار."),
-            new Responsibility("broadcast", "الرسائل الجماعية عبر واتساب",
-                    "الرسائل الجماعية التي يرسلها المشرف للطلاب أو أولياء الأمور عبر واتساب."));
+            new Responsibility(ATTENDANCE, "رسالة الحضور",
+                    "تُرسَل لحظة تسجيل حضور الطالب في الحصة.", false),
+            new Responsibility(ABSENCE, "رسالة الغياب",
+                    "تُرسَل للطلاب الغائبين في نهاية الأسبوع المحدد.", false),
+            new Responsibility(EXAM, "رسالة الدرجة",
+                    "تُرسَل لولي الأمر نتيجة الطالب بعد كل اختبار.", false),
+            new Responsibility(REPORT, "تقرير الطالب",
+                    "ملف تقرير الطالب (PDF) مع نص التقرير.", true),
+            new Responsibility(BARCODE, "كارت الباركود",
+                    "كارت الطالب (PDF) عند إضافته لأول مرة أو عند إعادة إرساله.", true),
+            new Responsibility(BROADCAST, "الرسائل الجماعية والرسائل اليدوية",
+                    "الرسائل التي يكتبها المشرف ويرسلها للطلاب أو أولياء الأمور.", false));
 
     public static final Set<String> CODES =
             Set.copyOf(ALL.stream().map(Responsibility::code).toList());
 
+    /**
+     * The message log's {@code origin} to the purpose that routes it.
+     *
+     * <p>NEW_STUDENT and BARCODE both ship the same barcode card - one on its own
+     * because the student was just added, the other because someone pressed the
+     * button - so they share one number and one template. Splitting them would
+     * make the teacher answer the same question twice.
+     */
+    private static final Map<String, String> BY_ORIGIN = Map.of(
+            "ATTENDANCE", ATTENDANCE,
+            "ABSENCE", ABSENCE,
+            "EXAM_GRADE", EXAM,
+            "REPORT", REPORT,
+            "NEW_STUDENT", BARCODE,
+            "BARCODE", BARCODE,
+            "MANUAL", BROADCAST,
+            "INVOICE", BROADCAST);
+
+    /** The purpose that routes one origin; {@code broadcast} for anything unmapped. */
+    public static String forOrigin(String origin) {
+        return origin == null ? BROADCAST : BY_ORIGIN.getOrDefault(origin, BROADCAST);
+    }
+
     public static boolean isValid(String code) {
         return CODES.contains(code);
+    }
+
+    public static Responsibility find(String code) {
+        return ALL.stream().filter(r -> r.code().equals(code)).findFirst().orElse(null);
     }
 
     private WhatsappResponsibilityCatalog() {

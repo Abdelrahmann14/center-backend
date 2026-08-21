@@ -18,8 +18,9 @@ Two things shape every hosting decision below:
 ## Before the first deploy
 
 - **Rotate any credential that has ever been shared.** The Groq key that used
-  to sit in `.env.example` is compromised and must be replaced at
-  console.groq.com.
+  to sit in `.env.example` is compromised. The system no longer calls Groq at
+  all, but the key itself is still live until it is revoked at console.groq.com
+  — revoke it there.
 - Generate a real `JWT_SECRET` (32+ random characters). Changing it later logs
   every user out.
 - Set `SPRING_PROFILES_ACTIVE=prod`. This disables Swagger and stops responses
@@ -42,8 +43,9 @@ injects these as real environment variables.
 | `CORS_ALLOWED_ORIGINS` | only if the frontend is on another origin | e.g. `https://center.vercel.app` |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | for contacts sync | Google Cloud Console |
 | `GOOGLE_REDIRECT_URI` | for contacts sync | the **frontend** URL, and it must match the OAuth client exactly |
-| `GREEN_API_INSTANCE_ID` / `GREEN_API_TOKEN` | for WhatsApp | blank + `GREEN_API_ENABLED=false` logs codes instead of sending |
-| `GROQ_API_KEY` | optional | blank turns AI message variants off |
+| `META_WABA_ID` / `META_APP_ID` / `META_APP_SECRET` / `META_ACCESS_TOKEN` | **yes, for WhatsApp** | blank = nothing can be sent at all |
+| `META_WEBHOOK_VERIFY_TOKEN` | for WhatsApp | any random string; Meta echoes it back on the webhook handshake |
+| `GREEN_CHECK_INSTANCE_ID` / `GREEN_CHECK_TOKEN` | optional | answers "is this number on WhatsApp"; sends nothing. Blank disables the check |
 | `PORT` | injected by the host | falls back to 8001 |
 
 `JWT_TTL_HOURS`, the Hikari and scheduler sizes, and the HTTP timeouts all have

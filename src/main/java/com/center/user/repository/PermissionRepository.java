@@ -15,8 +15,6 @@ public interface PermissionRepository extends JpaRepository<Permission, UUID> {
 
     Optional<Permission> findByCode(String code);
 
-    List<Permission> findAllByOrderBySortOrder();
-
     List<Permission> findByModuleIdOrderBySortOrder(UUID moduleId);
 
     List<Permission> findByCodeIn(Collection<String> codes);

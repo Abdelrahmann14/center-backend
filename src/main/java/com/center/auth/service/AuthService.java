@@ -46,7 +46,7 @@ public interface AuthService {
      * Issues a fresh token for another account in the caller's workspace after
      * confirming that account's own password. The old token stays valid until it
      * expires, so no sign-out is needed. Admin and assistant accounts of one
-     * workspace can switch between each other; students/parents are never a
+     * workspace can switch between each other; nobody else is ever a
      * target.
      *
      * @throws org.springframework.security.authentication.BadCredentialsException

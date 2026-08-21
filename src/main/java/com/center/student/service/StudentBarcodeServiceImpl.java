@@ -19,7 +19,7 @@ import com.center.student.entity.Student;
 import com.center.student.repository.StudentRepository;
 import com.center.user.entity.User;
 import com.center.user.repository.UserRepository;
-import com.center.whatsapp.service.GreenApiClient;
+import com.center.whatsapp.service.WhatsappDocumentSender;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.common.BitMatrix;
@@ -53,7 +53,7 @@ public class StudentBarcodeServiceImpl implements StudentBarcodeService {
 
     private final StudentRepository studentRepository;
     private final UserRepository userRepository;
-    private final GreenApiClient greenApi;
+    private final WhatsappDocumentSender documents;
 
     /** Reaches {@code cardHtml}'s transaction; a {@code this.} call would not. */
     @org.springframework.beans.factory.annotation.Autowired
@@ -123,7 +123,7 @@ public class StudentBarcodeServiceImpl implements StudentBarcodeService {
             throw new BusinessRuleException("لا يوجد رقم هاتف للطالب");
         }
         byte[] pdf = renderPdf(studentId);
-        greenApi.sendDocument(phone, pdf, fileName(studentId), "باركود الطالب: " + s.getName(), "BARCODE",
+        documents.send(phone, pdf, fileName(studentId), "باركود الطالب: " + s.getName(), "BARCODE",
                 studentId);
         return phone;
     }
@@ -195,12 +195,14 @@ public class StudentBarcodeServiceImpl implements StudentBarcodeService {
 
         b.append("<table class=\"info\"><tbody>");
         b.append(infoRow("الاسم", s.getName(), "كود الطالب", code));
-        b.append(infoRow("الصف", s.getGrade(),
-                "الشعبة", s.getAcademicTrack() == null ? null : s.getAcademicTrack().getValue()));
-        b.append(infoRow("المدرسة", s.getSchool(), "المنطقة السكنية", s.getCity()));
-        b.append(infoRow("المجموعة", groupLabel(s), "سعر الحصة", price(s)));
+        // "الشعبة" used to sit beside the grade and is gone - the centre stopped
+        // tracking it, so the card was printing an empty cell on every student.
+        // The school moves up to keep the row a pair rather than leaving a hole.
+        b.append(infoRow("الصف", s.getGrade(), "المدرسة", s.getSchool()));
+        b.append(infoRow("المنطقة السكنية", s.getCity(), "المجموعة", groupLabel(s)));
         b.append(infoRow("هاتف الطالب", join(s.getStudentPhones()),
                 "هاتف ولي الأمر", join(s.getParentPhones())));
+        b.append(infoRow("سعر الحصة", price(s), "", null));
         b.append("</tbody></table>");
         b.append("</div>");
 
@@ -258,7 +260,7 @@ public class StudentBarcodeServiceImpl implements StudentBarcodeService {
         if (v == null && s.getGroup() != null) {
             v = s.getGroup().getLessonPrice();
         }
-        return v == null ? null : v.stripTrailingZeros().toPlainString() + " ج.م";
+        return v == null ? null : com.center.common.util.ArabicFormat.digits(v.stripTrailingZeros().toPlainString());
     }
 
     private static String join(String[] values) {

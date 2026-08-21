@@ -31,10 +31,10 @@ public record StudentResponse(
         @JsonProperty("is_active") boolean isActive,
         /** Why the student is blocked; null while they are active. */
         String blockReason,
-        /** Whether the student has claimed a login account (self-registered). */
-        boolean registered,
         /** Whether the student's phone(s) are saved as Google contacts. */
         @JsonProperty("google_synced") boolean googleSynced,
+        /** When the barcode card first reached them; null = they never got one. */
+        OffsetDateTime barcodeSentAt,
         OffsetDateTime createdAt,
         /** Username of whoever created the row (audit columns on BaseEntity). */
         String createdBy,

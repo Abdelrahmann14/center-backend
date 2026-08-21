@@ -12,6 +12,8 @@ public record AdminSummaryResponse(
         String email,
         /** WhatsApp number invoices are sent to; null until the super admin sets it. */
         String phone,
+        /** Public contact number message templates print; null until it is set. */
+        String officePhone,
         boolean active,
         OffsetDateTime createdAt,
         /** Username of whoever created / last edited the row. */

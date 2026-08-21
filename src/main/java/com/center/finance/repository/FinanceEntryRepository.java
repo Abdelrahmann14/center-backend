@@ -12,7 +12,4 @@ public interface FinanceEntryRepository extends JpaRepository<FinanceEntry, UUID
 
     /** Every line in the window, bucketed by session in the service. */
     List<FinanceEntry> findBySessionDateBetweenOrderByCreatedAtAsc(LocalDate from, LocalDate to);
-
-    /** One session's lines, in the order they were written. */
-    List<FinanceEntry> findByLectureIdAndSessionDateOrderByCreatedAtAsc(UUID lectureId, LocalDate sessionDate);
 }

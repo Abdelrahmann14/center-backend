@@ -30,4 +30,15 @@ public class Grade extends BaseEntity {
     /** Drives which الشعبة options the student form offers. */
     @Column(name = "track_kind", nullable = false)
     private TrackKind trackKind = TrackKind.NONE;
+
+    /**
+     * Where this grade sits in the school year sequence, low first.
+     *
+     * <p>Every select in the app reads the same list, so ordering it here is what
+     * makes الصف appear in school order everywhere at once. A new grade defaults
+     * to the end rather than the middle - guessing its place from its name would
+     * be wrong exactly when the name is unusual.
+     */
+    @Column(name = "sort_order", nullable = false)
+    private int sortOrder = 100;
 }

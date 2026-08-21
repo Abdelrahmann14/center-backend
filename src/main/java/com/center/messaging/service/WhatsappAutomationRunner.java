@@ -62,7 +62,10 @@ public class WhatsappAutomationRunner {
         }
         try {
             TenantContext.callAs(e.adminId(), () -> {
-                messagingService.sendNewStudent(e.studentId());
+                // The acting account travels on the event rather than being read
+                // here: this runs @Async on another thread, where the security
+                // context of the request that created the student is gone.
+                messagingService.sendNewStudent(e.studentId(), e.createdByUserId());
                 return null;
             });
         } catch (RuntimeException ex) {

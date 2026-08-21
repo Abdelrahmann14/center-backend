@@ -35,10 +35,6 @@ public class MessageAutomation extends TenantEntity {
     @Column(nullable = false)
     private boolean enabled;
 
-    /** When true this message is rendered to a white image and sent as a picture. */
-    @Column(name = "send_as_image", nullable = false)
-    private boolean sendAsImage;
-
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private MessageAudience audience = MessageAudience.STUDENT;

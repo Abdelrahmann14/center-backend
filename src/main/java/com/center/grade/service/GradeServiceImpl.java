@@ -1,6 +1,8 @@
 package com.center.grade.service;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -30,7 +32,23 @@ public class GradeServiceImpl implements GradeService {
     @Override
     @Transactional(readOnly = true)
     public List<GradeResponse> findAll() {
-        return gradeMapper.toResponses(gradeRepository.findAllByOrderByCreatedAtAsc());
+        return gradeMapper.toResponses(gradeRepository.findAllByOrderBySortOrderAscNameAsc());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<GradeResponse> findInUse() {
+        return gradeMapper.toResponses(gradeRepository.findInUse());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<String, Long> studentCountsByGrade() {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (Object[] row : gradeRepository.countStudentsByGrade()) {
+            counts.put((String) row[0], ((Number) row[1]).longValue());
+        }
+        return counts;
     }
 
     @Override
@@ -71,5 +89,6 @@ public class GradeServiceImpl implements GradeService {
         grade.setName(name);
         grade.setTrackKind(request.trackKindOrDefault());
         grade.setActive(request.activeOrDefault());
+        grade.setSortOrder(request.sortOrderOrDefault());
     }
 }

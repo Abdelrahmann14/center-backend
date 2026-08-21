@@ -137,8 +137,7 @@ public class AuthServiceImpl implements com.center.auth.service.AuthService {
         // Every guard fails with the same generic error so a probe cannot tell a
         // wrong password from a target it is not allowed to reach.
         User target = userRepository.findById(targetUserId)
-                // Only admin/assistant accounts back the desktop app; a student or
-                // parent is never a switch target even within the workspace.
+                // Only an admin or an assistant is ever a switch target.
                 .filter(candidate -> candidate.getRole() == Role.ADMIN || candidate.getRole() == Role.USER)
                 // Same workspace only: admin<->assistant and assistant<->sibling.
                 .filter(candidate -> workspace != null && workspace.equals(workspaceOf(candidate)))

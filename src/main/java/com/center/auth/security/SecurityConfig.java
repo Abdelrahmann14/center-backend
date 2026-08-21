@@ -30,8 +30,10 @@ public class SecurityConfig {
 
     private static final String[] PUBLIC_ENDPOINTS = {
             "/api/auth/login",
-            // Student self-registration - students have no account yet.
-            "/api/register/**",
+            // Meta's WhatsApp webhook. It cannot carry a JWT, so the endpoint
+            // authenticates the CALL instead: the GET handshake must present our
+            // verify token, and every POST body must carry Meta's HMAC signature.
+            "/api/whatsapp/webhook",
             // Liveness and readiness: the platform's probes carry no token.
             "/api/health",
             "/api/health/ready",
@@ -83,12 +85,9 @@ public class SecurityConfig {
      */
     @Bean
     public RoleHierarchy roleHierarchy() {
-        // PARENT is a leaf peer of STUDENT: reachable from the admin ranks above
-        // (so staff endpoints stay open to them) but it implies nothing itself.
         return RoleHierarchyImpl.withDefaultRolePrefix()
                 .role("SUPER_ADMIN").implies("ADMIN")
                 .role("ADMIN").implies("USER")
-                .role("USER").implies("STUDENT", "PARENT")
                 .build();
     }
 }

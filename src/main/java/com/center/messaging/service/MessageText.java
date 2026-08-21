@@ -5,6 +5,8 @@ import java.math.RoundingMode;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
+
+import com.center.common.util.ArabicFormat;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.TextStyle;
@@ -70,19 +72,31 @@ public final class MessageText {
         return day.getDisplayName(TextStyle.FULL, AR);
     }
 
+    /**
+     * Who the message goes out as: the name it signs with, and the number it
+     * tells the reader to call back on.
+     *
+     * <p>The office number is deliberately not the teacher's personal one - that
+     * is where the invoices go, and a template quoting it would hand it to every
+     * parent the system writes to.
+     */
+    public record Teacher(String name, String officePhone) {
+    }
+
     /** Time-of-send variables (date/time/day) plus the teacher name and sender. */
-    public static Map<String, String> globals(String teacher) {
+    public static Map<String, String> globals(Teacher teacher) {
         LocalDate date = LocalDate.now(CAIRO);
         LocalTime time = LocalTime.now(CAIRO);
         String d = date.toString();
-        String t = hhmm(time);
+        String t = ArabicFormat.time(time);
         Map<String, String> m = new HashMap<>();
         m.put("date", d);
         m.put("time", t);
         m.put("now", d + " " + t);
         m.put("day", dayName(date.getDayOfWeek()));
-        m.put("teacher.name", nz(teacher));
-        m.put("sender", nz(teacher));
+        m.put("teacher.name", nz(teacher == null ? null : teacher.name()));
+        m.put("sender", nz(teacher == null ? null : teacher.name()));
+        m.put("teacher.office_phone", nz(teacher == null ? null : teacher.officePhone()));
         return m;
     }
 
@@ -91,7 +105,7 @@ public final class MessageText {
      * and the student's own fields. Callers add message-specific vars (the lesson,
      * the attendance instant, the exam) on top.
      */
-    public static Map<String, String> studentVars(Student s, String teacher) {
+    public static Map<String, String> studentVars(Student s, Teacher teacher) {
         Map<String, String> m = baseVars();
         m.putAll(globals(teacher));
         m.put("student.name", nz(s.getName()));
@@ -115,17 +129,26 @@ public final class MessageText {
     public static void putGroup(Map<String, String> m, Group group) {
         m.put("group", groupLabel(group));
         m.put("group.day", group == null ? "" : dayName(group.getDayOfWeek()));
-        m.put("group.time", group == null || group.getStartTime() == null
-                ? "" : hhmm(group.getStartTime()));
+        m.put("group.time", group == null ? "" : ArabicFormat.time(group.getStartTime()));
         m.put("center.name", group == null || group.getCenterName() == null
                 ? "" : group.getCenterName());
     }
 
-    /** The lesson's own variables. */
+    /**
+     * The lesson's own variables, including the day it was held.
+     *
+     * <p>{@code absence.date} is that same day seen from the other side: a
+     * student who was not registered for this lesson was absent on the day the
+     * lesson ran, and there is no attendance row to read a date off.
+     */
     public static void putLesson(Map<String, String> m, Lecture lecture) {
         m.put("lesson.name", lecture == null || lecture.getName() == null ? "" : lecture.getName());
         m.put("lesson.homework", lecture == null || lecture.getHomework() == null
                 ? "" : lecture.getHomework());
+        String day = lecture == null || lecture.getCreatedAt() == null ? ""
+                : lecture.getCreatedAt().atZoneSameInstant(CAIRO).toLocalDate().toString();
+        m.put("lesson.date", day);
+        m.put("absence.date", day);
     }
 
     /**
@@ -144,8 +167,8 @@ public final class MessageText {
         if (at != null) {
             LocalTime local = at.atZoneSameInstant(CAIRO).toLocalTime();
             m.put("attendance.date", at.atZoneSameInstant(CAIRO).toLocalDate().toString());
-            m.put("attendance.time", hhmm(local));
-            m.put("attendance.time_exact", hhmmss(local));
+            m.put("attendance.time", ArabicFormat.time(local));
+            m.put("attendance.time_exact", ArabicFormat.timeExact(local));
         }
         m.put("homework.status", r.getHomeworkFlag() == null
                 ? "حل الواجب" : r.getHomeworkFlag().getValue());
@@ -201,21 +224,13 @@ public final class MessageText {
         return matcher.find() ? new BigDecimal(matcher.group()) : null;
     }
 
-    private static String hhmm(LocalTime t) {
-        return String.format("%02d:%02d", t.getHour(), t.getMinute());
-    }
-
-    private static String hhmmss(LocalTime t) {
-        return String.format("%02d:%02d:%02d", t.getHour(), t.getMinute(), t.getSecond());
-    }
-
     /** A readable group label: "السبت ١٦:٠٠ - المركز". */
     public static String groupLabel(Group group) {
         if (group == null) {
             return "";
         }
         LocalTime t = group.getStartTime();
-        String time = t == null ? "" : hhmm(t);
+        String time = ArabicFormat.time(t);
         String day = dayName(group.getDayOfWeek());
         String center = group.getCenterName() == null ? "" : group.getCenterName();
         return (day + " " + time + (center.isBlank() ? "" : " - " + center)).strip();

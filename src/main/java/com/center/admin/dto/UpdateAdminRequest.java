@@ -18,6 +18,9 @@ public record UpdateAdminRequest(
         /** WhatsApp number, digits only including the country code. */
         @Size(max = 20) String phone,
 
+        /** Public contact number printed inside message templates. */
+        @Size(max = 20) String officePhone,
+
         @Size(min = ValidationRules.PASSWORD_MIN, max = ValidationRules.PASSWORD_MAX)
         String password) {
 }

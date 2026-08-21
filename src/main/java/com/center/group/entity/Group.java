@@ -10,15 +10,20 @@ import org.hibernate.annotations.Formula;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/** A weekly teaching slot at a center. Unique on (day_of_week, start_time). */
+/**
+ * A weekly teaching slot at a center.
+ *
+ * <p>Not unique on (day, time), deliberately - see V89. Soft delete (V69) meant
+ * the old constraint counted rows no screen draws, so a slot freed months ago
+ * stayed permanently occupied and the teacher was refused a time their calendar
+ * showed as empty.
+ */
 @Entity
-@Table(name = "groups",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"admin_id", "day_of_week", "start_time"}))
+@Table(name = "groups")
 @Getter
 @Setter
 @NoArgsConstructor

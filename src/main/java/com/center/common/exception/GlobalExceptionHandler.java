@@ -130,6 +130,63 @@ public class GlobalExceptionHandler {
         return problem(HttpStatus.CONFLICT, "تم تعديل هذا السجل من مكان آخر، حدّث الصفحة وأعد المحاولة");
     }
 
+    /**
+     * A database constraint said no.
+     *
+     * <p>Without this, every one of these fell through to the catch-all and came
+     * back as "حدث خطأ غير متوقع" - a 500 that says nothing, cannot be acted on,
+     * and reads like the server broke when in fact it refused on purpose. That
+     * is exactly how a stale unique constraint on `groups` went undiagnosed:
+     * removing the service's own pre-check left the database as the only thing
+     * still enforcing it, and its answer arrived as gibberish.
+     *
+     * <p>409, not 500: the request was well formed and the server understood it.
+     * The constraint name is logged rather than returned - it is a schema detail
+     * the user cannot use - but it is what makes the next one findable in one
+     * look at the log instead of a bisect.
+     */
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ProblemDetail onIntegrityViolation(
+            org.springframework.dao.DataIntegrityViolationException ex) {
+        String constraint = constraintName(ex);
+        log.warn("Database constraint rejected a write (constraint={})", constraint, ex);
+        return problem(HttpStatus.CONFLICT, switch (constraint == null ? "" : constraint) {
+            case "groups_admin_day_time_key" ->
+                "يوجد مجموعة أخرى في نفس اليوم والوقت";
+            case "centers_admin_name_key" -> "يوجد سنتر بنفس الاسم";
+            case "grades_admin_name_key" -> "يوجد صف بنفس الاسم";
+            default -> "لا يمكن حفظ هذه البيانات - تتعارض مع سجل موجود بالفعل";
+        });
+    }
+
+    /**
+     * The constraint Postgres named in its error, or null.
+     *
+     * <p>Reached for through the cause chain because Spring wraps the driver's
+     * exception twice, and read reflectively so this class does not have to
+     * import the Postgres driver to answer one question about it.
+     */
+    private static String constraintName(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof java.sql.SQLException sql
+                    && sql.getClass().getName().startsWith("org.postgresql")) {
+                try {
+                    Object dm = t.getClass().getMethod("getServerErrorMessage").invoke(t);
+                    if (dm != null) {
+                        Object name = dm.getClass().getMethod("getConstraint").invoke(dm);
+                        if (name != null) {
+                            return name.toString();
+                        }
+                    }
+                } catch (ReflectiveOperationException | RuntimeException ignored) {
+                    // Not a Postgres error we can read - fall through to the
+                    // generic message, which is still better than a 500.
+                }
+            }
+        }
+        return null;
+    }
+
     @ExceptionHandler(Exception.class)
     public ProblemDetail onUnexpected(Exception ex) {
         log.error("Unhandled error", ex);

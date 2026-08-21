@@ -44,7 +44,6 @@ import com.center.student.repository.StudentRepository;
 import com.center.user.repository.UserRepository;
 import com.center.exam.service.ExamService;
 import com.center.notification.service.NotificationService;
-import com.center.push.service.PushService;
 import com.center.common.tenant.TenantContext;
 
 import lombok.RequiredArgsConstructor;
@@ -69,7 +68,6 @@ public class ExamServiceImpl implements ExamService {
     private final StudentRepository studentRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
-    private final PushService pushService;
 
     @Override
     @Transactional(readOnly = true)
@@ -213,10 +211,7 @@ public class ExamServiceImpl implements ExamService {
         if (exam.getScheduledDate() == null || exam.getGroupIds() == null || exam.getGroupIds().length == 0) {
             throw new BusinessRuleException("يجب جدولة الاختبار لمجموعة وتاريخ قبل النشر");
         }
-        boolean firstPublish = exam.getPublishedAt() == null;
-        boolean contentChanged = exam.getPublishedVersion() == null
-                || exam.getContentVersion() != exam.getPublishedVersion();
-        if (firstPublish) {
+        if (exam.getPublishedAt() == null) {
             exam.setPublishedAt(OffsetDateTime.now());
         }
         // Every publish makes the current content live and regenerates each group's
@@ -225,13 +220,6 @@ public class ExamServiceImpl implements ExamService {
         examRepository.save(exam);
         regenerateGroupPasswords(exam);
 
-        if (firstPublish) {
-            notifyEligibleStudents(exam, false);
-        } else if (contentChanged) {
-            // Re-publish with edits: tell every eligible student to re-download; those
-            // who already downloaded see their copy marked outdated (version bumped).
-            notifyEligibleStudents(exam, true);
-        }
         return toResponse(exam, lectureName(exam.getLectureId()), questionRepository.countByExamId(examId));
     }
 
@@ -239,16 +227,6 @@ public class ExamServiceImpl implements ExamService {
     @Transactional
     public void delete(UUID examId) {
         Exam exam = findEntity(examId);
-        // Pull this exam's publish/update rows from every student's inbox and tell
-        // their devices to drop the downloaded copy, then remove the exam.
-        Set<UUID> recipients = eligibleRecipients(exam);
-        notificationService.deleteByLink(exam.getId(),
-                List.of(NotificationType.EXAM_PUBLISHED, NotificationType.EXAM_UPDATED));
-        if (!recipients.isEmpty()) {
-            pushService.sendToUsers(recipients, "تم حذف اختبار",
-                    "أزال المعلم اختبار \"" + exam.getName() + "\".",
-                    Map.of("type", NotificationType.EXAM_REMOVED, "examId", exam.getId().toString()));
-        }
         examRepository.delete(exam); // FK cascade removes its questions, choices and passwords
     }
 
@@ -313,44 +291,6 @@ public class ExamServiceImpl implements ExamService {
         for (UUID groupId : exam.getGroupIds()) {
             groupPasswordRepository.save(new ExamGroupPassword(exam.getId(), groupId, generatePassword()));
         }
-    }
-
-    /** User ids of every active, account-holding student in the exam's assigned groups. */
-    private Set<UUID> eligibleRecipients(Exam exam) {
-        Set<UUID> recipients = new LinkedHashSet<>();
-        if (exam.getGroupIds() == null) {
-            return recipients;
-        }
-        for (UUID groupId : exam.getGroupIds()) {
-            for (Student student : studentRepository.findByGroup_IdAndActiveTrue(groupId)) {
-                if (student.getUserId() != null) {
-                    recipients.add(student.getUserId());
-                }
-            }
-        }
-        return recipients;
-    }
-
-    /**
-     * Notify every eligible student (in-app inbox row + OS push). {@code update} picks
-     * the "new exam" wording versus the "re-download the updated copy" wording. Only
-     * students in the assigned groups are notified, since only they can take the exam.
-     */
-    private void notifyEligibleStudents(Exam exam, boolean update) {
-        String teacher = teacherName();
-        String type = update ? NotificationType.EXAM_UPDATED : NotificationType.EXAM_PUBLISHED;
-        String title = update ? "تم تحديث اختبار" : "اختبار جديد متاح";
-        String body = update
-                ? "تم تحديث اختبار \"" + exam.getName() + "\". احذف النسخة القديمة وحمّل الأحدث."
-                : "أصبح اختبار \"" + exam.getName() + "\" متاحًا الآن.";
-        Set<UUID> recipients = eligibleRecipients(exam);
-        for (UUID userId : recipients) {
-            notificationService.notifyFrom(userId, TenantContext.get(), teacher, type,
-                    title, body, exam.getId(), null);
-        }
-        // OS push (fire-and-forget); data.type drives the tap -> Lesson Exams page.
-        pushService.sendToUsers(recipients, title, body,
-                Map.of("type", type, "examId", exam.getId().toString()));
     }
 
     /** The teacher (workspace admin) display name, used as the notification sender. */

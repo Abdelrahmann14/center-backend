@@ -414,35 +414,9 @@ public class FinanceServiceImpl implements FinanceService {
         }
         int day = group.getDayOfWeek();
         String name = day >= 0 && day < DAYS.length ? DAYS[day] : "";
-        return (name + " · " + arabicTime(group.getStartTime())).strip();
+        return (name + " · " + com.center.common.util.ArabicFormat.time(group.getStartTime())).strip();
     }
 
-    /**
-     * A wall-clock time in the 12-hour Arabic reading the whole system uses:
-     * ٤ م, ٤:٣٠ م, ٩ ص. Minutes are dropped when zero, because "four in the
-     * afternoon" is how the hour is actually said. Mirrors the web's
-     * {@code fmtTime} - this copy exists because the PDF is rendered here.
-     */
-    private static String arabicTime(LocalTime time) {
-        if (time == null) {
-            return "";
-        }
-        int hour = time.getHour();
-        int minute = time.getMinute();
-        String period = hour < 12 ? "ص" : "م";
-        int twelve = hour % 12 == 0 ? 12 : hour % 12;
-        return minute == 0
-                ? arabicDigits(String.valueOf(twelve)) + " " + period
-                : arabicDigits(twelve + ":" + String.format("%02d", minute)) + " " + period;
-    }
-
-    private static String arabicDigits(String value) {
-        StringBuilder b = new StringBuilder(value.length());
-        for (char c : value.toCharArray()) {
-            b.append(c >= '0' && c <= '9' ? (char) ('٠' + (c - '0')) : c);
-        }
-        return b.toString();
-    }
 
     private FinanceEntry apply(FinanceEntry entry, FinanceEntryRequest request) {
         entry.setLectureId(request.lectureId());

@@ -23,13 +23,11 @@ import com.center.google.entity.GoogleAccount;
 import com.center.google.entity.GoogleContactLink;
 import com.center.google.entity.GradeContactMark;
 import com.center.student.entity.Student;
-import com.center.common.enums.LinkStatus;
 import com.center.google.repository.GoogleAccountRepository;
 import com.center.google.repository.GoogleContactLinkRepository;
 import com.center.google.repository.GoogleContactsConfigRepository;
 import com.center.google.repository.GradeContactMarkRepository;
 import com.center.grade.repository.GradeRepository;
-import com.center.parent.repository.ParentStudentLinkRepository;
 import com.center.student.repository.StudentRepository;
 import com.center.google.client.GooglePeopleClient.PersonRef;
 import com.center.common.tenant.TenantContext;
@@ -66,7 +64,6 @@ public class GoogleContactSyncService {
     private final GoogleContactLinkRepository linkRepo;
     private final GradeRepository gradeRepo;
     private final StudentRepository studentRepository;
-    private final ParentStudentLinkRepository parentLinkRepository;
     private final TenantScopedExecutor tenantTx;
     private final GoogleOAuthClient oauth;
     private final GooglePeopleClient people;
@@ -86,18 +83,6 @@ public class GoogleContactSyncService {
     @TransactionalEventListener(fallbackExecution = true)
     public void onStudentChanged(GoogleContactEvents.StudentChanged e) {
         queue(e.adminId(), e.studentId());
-    }
-
-    @Async
-    @TransactionalEventListener(fallbackExecution = true)
-    public void onParentChanged(GoogleContactEvents.ParentChanged e) {
-        try {
-            for (var link : parentLinkRepository.findByParentIdAndStatus(e.parentId(), LinkStatus.APPROVED)) {
-                queue(link.getStudentAdminId(), link.getStudentId());
-            }
-        } catch (Exception ex) {
-            log.warn("Google sync for parent {} failed: {}", e.parentId(), ex.getMessage());
-        }
     }
 
     @Async
@@ -316,8 +301,7 @@ public class GoogleContactSyncService {
 
     /**
      * Drop the Google contacts of students that no longer exist here. Every link
-     * carries a student id as its subject - the parent listener resolves parents
-     * to their students before syncing - so absence from the roster is enough.
+     * carries a student id as its subject, so absence from the roster is enough.
      *
      * <p>Capped per pass. A workspace that clears out a graduating year hands
      * this method hundreds of orphans at once, and each one is a sequential HTTP

@@ -17,9 +17,9 @@ import jakarta.validation.constraints.Size;
 @Validated
 public record ApplicationProperties(
         @NotNull @Valid Jwt jwt,
-        @NotNull @Valid GreenApi greenApi,
+        @NotNull @Valid Meta meta,
+        @NotNull @Valid NumberCheck numberCheck,
         @NotNull @Valid Google google,
-        @NotNull @Valid Ai ai,
         @NotNull @Valid Registration registration,
         @NotNull @Valid Security security) {
 
@@ -31,19 +31,132 @@ public record ApplicationProperties(
             @Positive int ttlHours) {
     }
 
-    /** WhatsApp delivery for student registration codes. Secrets come from .env. */
-    public record GreenApi(
-            @NotNull String baseUrl,
-            String instanceId,
-            String apiToken,
-            /** When false, codes are logged instead of sent (local testing only). */
+    /**
+     * WhatsApp Cloud API, hosted by Meta - the only way this system sends. One set
+     * of credentials for the whole platform: Meta authenticates the BUSINESS, and
+     * each number is addressed by its own {@code phone_number_id} under the same
+     * WhatsApp Business Account. That is why these live in the environment rather
+     * than on the number's own row.
+     */
+    public record Meta(
+            /** Graph API version, e.g. {@code v26.0}. Pinned, never "latest". */
+            @NotNull String apiVersion,
+
+            /** The WhatsApp Business Account every provisioned number belongs to. */
+            String wabaId,
+
+            /** The Meta app the token and the webhook belong to. */
+            String appId,
+
+            /** Signs the webhook payloads; used to verify they really came from Meta. */
+            String appSecret,
+
+            /** Permanent system-user token. Full send + management rights - a secret. */
+            String accessToken,
+
+            /** Echoed back on the webhook's GET handshake to prove the URL is ours. */
+            String webhookVerifyToken,
+
+            /**
+             * What Meta charges per message, by template category, in US dollars.
+             *
+             * <p>Configuration rather than constants because Meta republishes its
+             * rate card per country several times a year and the numbers differ by
+             * destination. Everything computed from them is labelled an estimate in
+             * the UI - the authoritative figure is the one on the Meta invoice, and
+             * a dashboard that pretended otherwise would be lying about money.
+             */
+            @NotNull Rates rates,
+
             boolean enabled) {
 
-        /** True only when a real send can actually be attempted. */
+        /** True only when a real Graph call can actually be attempted. */
+        public boolean configured() {
+            return enabled
+                    && accessToken != null && !accessToken.isBlank()
+                    && wabaId != null && !wabaId.isBlank();
+        }
+
+        /** {@code https://graph.facebook.com/v26.0} - no trailing slash. */
+        public String graphBase() {
+            return "https://graph.facebook.com/" + apiVersion;
+        }
+    }
+
+    /**
+     * The one thing the official API cannot do: answer whether a phone number is
+     * on WhatsApp at all.
+     *
+     * <p>Cloud API has no endpoint for it and Meta will not add one - it would be
+     * a free enumeration oracle over every phone number alive. The on-premises
+     * {@code /v1/contacts} that used to answer it died with the on-premises API
+     * in October 2025. So the check - and ONLY the check - goes through Green
+     * API, which runs a real WhatsApp client and can ask.
+     *
+     * <p>Nothing is ever SENT through this. Green carries no message, no card, no
+     * template; it is asked a yes/no question about a number and nothing else.
+     * That is the whole reason it is acceptable to have back.
+     *
+     * <p>One instance for the entire platform, not one per teacher. A number
+     * either exists on WhatsApp or it does not - the answer is a property of the
+     * number, identical for everyone asking, so making each teacher pay for and
+     * maintain their own instance would buy nothing. It also means the answer
+     * cache is shared: two teachers with the same parent on their roster cost one
+     * check between them.
+     */
+    public record NumberCheck(
+            /** Green API host, no trailing slash. */
+            @NotNull String baseUrl,
+
+            /** The Green instance id ({@code waInstance<ID>} in their URLs). */
+            String instanceId,
+
+            /** That instance's API token - a secret, environment only. */
+            String token,
+
+            /**
+             * How long an answer is trusted before it is asked again. A number
+             * that gains or loses WhatsApp is rare but not impossible, and a
+             * permanent cache would make the first wrong answer permanent too.
+             */
+            @NotNull java.time.Duration ttl,
+
+            boolean enabled) {
+
+        /** True only when a real check can actually be attempted. */
         public boolean configured() {
             return enabled
                     && instanceId != null && !instanceId.isBlank()
-                    && apiToken != null && !apiToken.isBlank();
+                    && token != null && !token.isBlank();
+        }
+    }
+
+    /**
+     * Meta's per-message price by template category, in US dollars. SERVICE
+     * (a reply inside the 24-hour window) is free and defaults to zero.
+     */
+    public record Rates(
+            java.math.BigDecimal marketing,
+            java.math.BigDecimal utility,
+            java.math.BigDecimal authentication,
+            java.math.BigDecimal service) {
+
+        /** The rate for one of Meta's category names; zero for anything unknown. */
+        public java.math.BigDecimal forCategory(String category) {
+            if (category == null) {
+                return java.math.BigDecimal.ZERO;
+            }
+            return switch (category.toUpperCase(java.util.Locale.ROOT)) {
+                case "MARKETING" -> orZero(marketing);
+                case "UTILITY" -> orZero(utility);
+                case "AUTHENTICATION" -> orZero(authentication);
+                case "SERVICE" -> orZero(service);
+                default -> java.math.BigDecimal.ZERO;
+            };
+        }
+
+        private static java.math.BigDecimal orZero(java.math.BigDecimal value) {
+            return value == null ? java.math.BigDecimal.ZERO : value;
         }
     }
 
@@ -57,23 +170,6 @@ public record ApplicationProperties(
         public boolean configured() {
             return clientId != null && !clientId.isBlank()
                     && clientSecret != null && !clientSecret.isBlank();
-        }
-    }
-
-    /**
-     * AI text generation for message variants, via an OpenAI-compatible API
-     * (Groq by default). The key is a secret and lives in .env. Blank = feature
-     * off, in which case variant generation reports it is not configured.
-     */
-    public record Ai(
-            @NotNull String baseUrl,
-            String apiKey,
-            @NotNull String model,
-            boolean enabled) {
-
-        /** True only when a real generation call can actually be attempted. */
-        public boolean configured() {
-            return enabled && apiKey != null && !apiKey.isBlank();
         }
     }
 

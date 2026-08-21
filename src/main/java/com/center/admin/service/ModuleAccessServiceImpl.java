@@ -34,8 +34,6 @@ public class ModuleAccessServiceImpl implements ModuleAccessService {
             case USER -> (adminId == null || userId == null)
                     ? Set.of()
                     : Set.copyOf(permissionRepository.findUserPermissionCodes(userId, adminId));
-            // Students and parents are governed by role, not fine-grained permissions.
-            case STUDENT, PARENT -> Set.of();
         };
     }
 

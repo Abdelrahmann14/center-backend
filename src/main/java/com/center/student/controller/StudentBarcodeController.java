@@ -2,7 +2,6 @@ package com.center.student.controller;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.http.HttpHeaders;
@@ -52,9 +51,12 @@ public class StudentBarcodeController {
 
     @PostMapping("/send")
     @PreAuthorize("hasAuthority('PERM_STUDENT_REPORT_SEND')")
-    @Operation(summary = "Send the new-student message + barcode card to WhatsApp")
-    public Map<String, String> send(@PathVariable UUID studentId) {
-        // The same template + recipients as the automatic "new student" message.
-        return Map.of("phone", messagingService.sendBarcode(studentId));
+    @Operation(summary = "Send the barcode card to the student on WhatsApp")
+    public WhatsappMessagingService.BarcodeSendResult send(@PathVariable UUID studentId) {
+        // The same message text as the automatic "new student" welcome, addressed
+        // to the student: the card is theirs and the code on it is what the desk
+        // scans. A refusal comes back as a reason rather than an error, so the
+        // page can say WHY - most often that the type has no template bound yet.
+        return messagingService.sendBarcode(studentId);
     }
 }

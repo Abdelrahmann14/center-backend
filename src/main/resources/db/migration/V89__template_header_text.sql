@@ -1,0 +1,11 @@
+-- The wording of a template's TEXT header, mirrored from Meta.
+--
+-- A header that carries {{1}} is a component of its own at send time: the count
+-- of its parameters is checked separately from the body's, and a send that
+-- supplies none is rejected with "number of localizable_params (0) does not
+-- match the expected number of params (1)". Storing the header text is what lets
+-- the system know whether the header takes a value at all - the format alone
+-- ("TEXT") does not say.
+--
+-- Left null on existing rows: the next template sync refills it from Meta.
+ALTER TABLE wa_cloud_template ADD COLUMN IF NOT EXISTS header_text text;

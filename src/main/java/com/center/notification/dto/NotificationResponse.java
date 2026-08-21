@@ -7,8 +7,6 @@ import java.util.UUID;
 public record NotificationResponse(
         UUID id,
         String sender,
-        /** The sender's profile photo as a base64 data URL, or null when they have none. */
-        String senderPhoto,
         String type,
         String title,
         String body,

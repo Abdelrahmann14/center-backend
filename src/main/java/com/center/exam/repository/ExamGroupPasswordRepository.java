@@ -12,7 +12,5 @@ public interface ExamGroupPasswordRepository extends JpaRepository<ExamGroupPass
 
     List<ExamGroupPassword> findByExamId(UUID examId);
 
-    Optional<ExamGroupPassword> findByExamIdAndGroupId(UUID examId, UUID groupId);
-
     void deleteByExamId(UUID examId);
 }

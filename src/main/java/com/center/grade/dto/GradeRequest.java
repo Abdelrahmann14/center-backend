@@ -10,7 +10,8 @@ import jakarta.validation.constraints.Size;
 public record GradeRequest(
         @NotBlank(message = "مطلوب") @Size(max = ValidationRules.GRADE_NAME_MAX) String name,
         TrackKind trackKind,
-        @JsonProperty("is_active") Boolean isActive) {
+        @JsonProperty("is_active") Boolean isActive,
+        Integer sortOrder) {
 
     public TrackKind trackKindOrDefault() {
         return trackKind == null ? TrackKind.NONE : trackKind;
@@ -18,5 +19,10 @@ public record GradeRequest(
 
     public boolean activeOrDefault() {
         return isActive == null || isActive;
+    }
+
+    /** A grade whose place was not stated goes last, not into the middle. */
+    public int sortOrderOrDefault() {
+        return sortOrder == null ? 100 : sortOrder;
     }
 }

@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.center.common.enums.AcademicTrack;
@@ -31,16 +32,10 @@ import com.center.group.repository.GroupRepository;
 import com.center.lecture.entity.Lecture;
 import com.center.lecture.repository.LectureRepository;
 import com.center.messaging.dto.AttendanceOptinResponse;
-import com.center.messaging.dto.AttendanceWhatsappCheck;
-import com.center.messaging.dto.AutomationResponse;
-import com.center.messaging.dto.AutomationUpdateRequest;
 import com.center.messaging.dto.LectureAbsentee;
 import com.center.messaging.dto.LectureMessageStatus;
 import com.center.messaging.dto.LecturePendingCounts;
-import com.center.messaging.dto.VariantResponse;
-import com.center.messaging.dto.VariantUpdateRequest;
 import com.center.messaging.dto.WhatsappMessageLogResponse;
-import com.center.messaging.dto.WhatsappSendRequest;
 import com.center.messaging.dto.WhatsappSendResult;
 import com.center.messaging.entity.AttendanceAutoOptin;
 import com.center.messaging.entity.MessageAutomation;
@@ -50,10 +45,6 @@ import com.center.messaging.repository.AttendanceAutoOptinRepository;
 import com.center.messaging.repository.MessageAutomationRepository;
 import com.center.messaging.repository.MessageVariantRepository;
 import com.center.messaging.repository.WhatsappMessageLogRepository;
-import com.center.common.enums.LinkStatus;
-import com.center.parent.entity.Parent;
-import com.center.parent.repository.ParentRepository;
-import com.center.parent.repository.ParentStudentLinkRepository;
 import com.center.registration.entity.Registration;
 import com.center.registration.repository.RegistrationRepository;
 import com.center.settings.service.SettingsService;
@@ -62,7 +53,11 @@ import com.center.student.entity.Student;
 import com.center.student.repository.StudentRepository;
 import com.center.student.specification.StudentSpecifications;
 import com.center.user.repository.UserRepository;
-import com.center.whatsapp.service.GreenApiClient;
+import com.center.whatsapp.dto.WhatsappResponsibilityResponse;
+import com.center.whatsapp.entity.WhatsappInstance;
+import com.center.whatsapp.service.WhatsappAvailabilityService;
+import com.center.whatsapp.service.WhatsappInstanceService;
+import com.center.whatsapp.service.WhatsappResponsibilityCatalog;
 
 import lombok.RequiredArgsConstructor;
 
@@ -76,23 +71,32 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class WhatsappMessagingService {
 
-    private static final int ALTERNATIVES = 3;
+    /**
+     * Who the barcode card goes to, on both paths that carry it - the welcome
+     * fired when a student is created, and the resend button.
+     *
+     * <p>Fixed rather than configurable. The card is the student's own identity
+     * card: the code printed on it is what the desk scans to register them, so
+     * the phone it has to live on is theirs. Sending it to a guardian instead
+     * puts it where it cannot be used, and NEW_STUDENT is the only automation
+     * whose message is a document rather than a notice - the rest are news about
+     * a student, which a parent is entitled to and the setting still governs.
+     */
+    private static final MessageAudience BARCODE_AUDIENCE = MessageAudience.STUDENT;
 
     private final MessageAutomationRepository automationRepository;
     private final MessageVariantRepository variantRepository;
     private final WhatsappMessageLogRepository logRepository;
     private final AttendanceAutoOptinRepository optinRepository;
     private final StudentRepository studentRepository;
-    private final ParentRepository parentRepository;
-    private final ParentStudentLinkRepository parentLinkRepository;
     private final RegistrationRepository registrationRepository;
     private final GroupRepository groupRepository;
     private final LectureRepository lectureRepository;
     private final UserRepository userRepository;
     private final SettingsService settingsService;
-    private final AiVariantClient aiVariantClient;
     private final WhatsappLogSender logSender;
-    private final GreenApiClient greenApiClient;
+    private final WhatsappInstanceService instances;
+    private final WhatsappAvailabilityService availability;
     private final com.center.student.service.StudentBarcodeService barcodeService;
     private final com.center.student.service.StudentReportService reportService;
 
@@ -117,93 +121,88 @@ public class WhatsappMessagingService {
         return id;
     }
 
-    // ── Automated messages ────────────────────────────────────────────────
-
-    @Transactional
-    public List<AutomationResponse> automations() {
-        return List.of(
-                toResponse(ensure(AutomationType.ATTENDANCE)),
-                toResponse(ensure(AutomationType.ABSENCE)),
-                toResponse(ensure(AutomationType.NEW_STUDENT)),
-                toResponse(ensure(AutomationType.EXAM_GRADE)),
-                toResponse(ensure(AutomationType.REPORT)));
+    /**
+     * The recipient a type is created with. Everything is news for the guardian
+     * except the barcode card, which is the student's own.
+     */
+    private static MessageAudience audienceFor(AutomationType type) {
+        return type == AutomationType.NEW_STUDENT ? BARCODE_AUDIENCE : MessageAudience.PARENT;
     }
 
-    @Transactional
-    public AutomationResponse updateAutomation(AutomationType type, AutomationUpdateRequest req) {
-        MessageAutomation a = ensure(type);
-        // The recipient is chosen per template on the Messages page (parent, student,
-        // or both). The week window is unused: attendance auto-send is gated per
-        // (lecture, group) on the registration page, and absence is sent from the
-        // Lessons page button.
-        if (req.audience() != null) {
-            a.setAudience(req.audience());
-        }
-        a.setEnabled(true);
-        a.setWeekStartDay(null);
-        a.setWeekEndDay(null);
-        automationRepository.save(a);
-
-        if (req.base() != null) {
-            String base = req.base().strip();
-            boolean asImage = Boolean.TRUE.equals(req.baseSendAsImage());
-            MessageVariant baseRow = variantRepository.findByAutomationIdOrderBySortOrder(a.getId()).stream()
-                    .filter(v -> v.getSortOrder() == 0).findFirst().orElse(null);
-            if (baseRow != null) {
-                baseRow.setBody(base);
-                baseRow.setSendAsImage(asImage);
-                variantRepository.save(baseRow);
-            } else if (!base.isEmpty()) {
-                MessageVariant fresh = newVariant(a.getId(), base, 0);
-                fresh.setSendAsImage(asImage);
-                variantRepository.save(fresh);
-            }
-        }
-        return toResponse(a);
-    }
-
-    @Transactional
-    public AutomationResponse generateVariants(AutomationType type) {
-        MessageAutomation a = automationRepository.findByType(type)
-                .orElseThrow(() -> new BusinessRuleException("احفظ الرسالة الأساسية أولاً"));
-        MessageVariant baseRow = variantRepository.findByAutomationIdOrderBySortOrder(a.getId()).stream()
-                .filter(v -> v.getSortOrder() == 0).findFirst().orElse(null);
-        if (baseRow == null || baseRow.getBody() == null || baseRow.getBody().isBlank()) {
-            throw new BusinessRuleException("اكتب الرسالة الأساسية أولاً قبل توليد الصيغ البديلة");
-        }
-
-        List<String> generated = aiVariantClient.generate(baseRow.getBody(), ALTERNATIVES);
-        variantRepository.deleteByAutomationIdAndSortOrderGreaterThan(a.getId(), 0);
-        List<MessageVariant> fresh = new ArrayList<>();
-        int order = 1;
-        for (String body : generated) {
-            MessageVariant v = newVariant(a.getId(), body, order++);
-            // A generated wording starts with the base message's own image setting.
-            v.setSendAsImage(baseRow.isSendAsImage());
-            fresh.add(v);
-        }
-        variantRepository.saveAll(fresh);
-        return toResponse(a);
-    }
-
-    @Transactional
-    public VariantResponse updateVariant(UUID id, VariantUpdateRequest req) {
-        MessageVariant v = variantRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("الصيغة غير موجودة"));
-        v.setBody(req.body().strip());
-        v.setSendAsImage(Boolean.TRUE.equals(req.sendAsImage()));
-        variantRepository.save(v);
-        return new VariantResponse(v.getId(), v.getBody(), v.isSendAsImage());
-    }
-
-    private MessageAutomation ensure(AutomationType type) {
-        return automationRepository.findByType(type).orElseGet(() -> {
-            MessageAutomation a = new MessageAutomation();
-            a.setType(type);
-            a.setEnabled(true);
-            a.setAudience(MessageAudience.PARENT);
-            return automationRepository.save(a);
+    /**
+     * The row one message type hangs its wording off, and a wording to hang -
+     * created on first use if the workspace has neither.
+     *
+     * <p>These used to appear when somebody opened the automated-messages page.
+     * That page is gone: what leaves is an approved Meta template now, so there
+     * was nothing left on it to decide. Provisioning therefore moved to the
+     * first send, which is the only moment left that needs the row to exist.
+     *
+     * <p>In a transaction of its own because every caller is reading inside a
+     * read-only one, and through {@code self} so the proxy - and therefore the
+     * annotation - is actually involved.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public MessageAutomation provision(AutomationType type) {
+        MessageAutomation a = automationRepository.findByType(type).orElseGet(() -> {
+            MessageAutomation fresh = new MessageAutomation();
+            fresh.setType(type);
+            // Every automation is enabled: this flag says the type exists and is
+            // configured, not that anybody wants it to fire. Whether the
+            // new-student welcome actually goes out is decided per ACCOUNT, on
+            // users.barcode_auto_send - see barcodeAutoSend().
+            fresh.setEnabled(true);
+            fresh.setAudience(audienceFor(type));
+            return automationRepository.save(fresh);
         });
+        if (bodies(a).isEmpty()) {
+            variantRepository.save(newVariant(a.getId(), defaultBody(type), 0));
+        }
+        return a;
+    }
+
+    /**
+     * What the history records for a type before anyone has said otherwise.
+     *
+     * <p>Deliberately a copy of the approved template's own wording: the text
+     * stored here is NOT what WhatsApp delivers - the template is - it is what
+     * the teacher reads back in the log. A history that paraphrases the message
+     * a parent actually got is worse than no history, so these track the
+     * templates and are the thing to update when a template's wording changes.
+     */
+    private static String defaultBody(AutomationType type) {
+        return switch (type) {
+            case ABSENCE -> """
+                    السيد ولي أمر الطالب : *{student.name}*
+                    نحيط سيادتكم علماً بأن الطالب تغيّب عن حصة *{lesson.name}* بتاريخ *{absence.date}*.
+
+                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
+                    شكرا""";
+            case NEW_STUDENT -> """
+                    تم تسجيلك في مكتب *{teacher.name}*.
+                    مرفق مع الرسالة بطاقة الباركود الخاصة بيك، الكود بتاعك هو *{student.serial}*.
+
+                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
+                    شكرا""";
+            case EXAM_GRADE -> """
+                    السيد ولي أمر الطالب : *{student.name}*
+                    نحيط سيادتكم علماً بأن الطالب حصل على *{exam.score}* من *{exam.max}* في *{exam.name}*.
+
+                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
+                    شكرا""";
+            case REPORT -> """
+                    السيد ولي أمر الطالب : *{student.name}*
+                    مرفق مع الرسالة تقرير الطالب حتى تاريخ *{date}*.
+
+                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
+                    شكرا""";
+            default -> """
+                    السيد ولي أمر الطالب : *{student.name}*
+                    نحيط سيادتكم علماً بأن الطالب حضر حصة *{lesson.name}* اليوم في تمام الساعة *{attendance.time}*.
+
+                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
+                    شكرا""";
+        };
     }
 
     private static MessageVariant newVariant(UUID automationId, String body, int sortOrder) {
@@ -212,23 +211,6 @@ public class WhatsappMessagingService {
         v.setBody(body);
         v.setSortOrder(sortOrder);
         return v;
-    }
-
-    private AutomationResponse toResponse(MessageAutomation a) {
-        List<MessageVariant> variants = variantRepository.findByAutomationIdOrderBySortOrder(a.getId());
-        String base = "";
-        boolean baseSendAsImage = false;
-        List<VariantResponse> alternatives = new ArrayList<>();
-        for (MessageVariant v : variants) {
-            if (v.getSortOrder() == 0) {
-                base = v.getBody();
-                baseSendAsImage = v.isSendAsImage();
-            } else {
-                alternatives.add(new VariantResponse(v.getId(), v.getBody(), v.isSendAsImage()));
-            }
-        }
-        return new AutomationResponse(a.getType(), a.isEnabled(), a.getAudience(),
-                a.getWeekStartDay(), a.getWeekEndDay(), base, baseSendAsImage, alternatives);
     }
 
     // ── Per-lesson attendance / absence (Lessons page buttons) ────────────
@@ -308,7 +290,7 @@ public class WhatsappMessagingService {
      *
      * <p>Deliberately NOT {@code @Transactional}. It used to be, and that made a
      * routine broadcast the most expensive thing the server did: a group of forty
-     * students meant forty sequential Green API round trips with a Hikari
+     * students meant forty sequential WhatsApp round trips with a Hikari
      * connection pinned open for the whole run. The pool holds eight, so eight
      * teachers pressing "send" at the same moment starved every other request in
      * the application - a login, a search, a health check - until the sends
@@ -330,7 +312,7 @@ public class WhatsappMessagingService {
         List<MessageVariant> variants = requireVariants(a);
         Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
         Group group = groupRepository.findById(groupId).orElse(null);
-        String teacher = teacherName();
+        MessageText.Teacher teacher = teacher();
         Set<UUID> already = logRepository.sentStudentIds(lectureId, "ATTENDANCE");
 
         List<PlannedMessage> planned = new ArrayList<>();
@@ -357,7 +339,7 @@ public class WhatsappMessagingService {
         List<MessageVariant> variants = requireVariants(a);
         Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
         Group group = groupRepository.findById(groupId).orElse(null);
-        String teacher = teacherName();
+        MessageText.Teacher teacher = teacher();
         Set<UUID> present = registrationRepository.presentStudentIds(lectureId, RegistrationStatus.PRESENT);
         Set<UUID> already = logRepository.sentStudentIds(lectureId, "ABSENCE");
 
@@ -386,7 +368,7 @@ public class WhatsappMessagingService {
             boolean any = false;
             for (WhatsappLogSender.Recipient r : m.recipients()) {
                 any |= logSender.logAndSend(r, m.body(), "MANUAL", m.origin(),
-                        lectureId, groupId, byUser, byName, m.asImage());
+                        lectureId, groupId, byUser, byName, m.vars());
             }
             if (any) {
                 sent++;
@@ -412,7 +394,7 @@ public class WhatsappMessagingService {
         }
         for (WhatsappLogSender.Recipient r : m.recipients()) {
             logSender.logAndSend(r, m.body(), "SYSTEM", m.origin(), lectureId, groupId,
-                    null, null, m.asImage());
+                    null, null, m.vars());
         }
     }
 
@@ -449,7 +431,7 @@ public class WhatsappMessagingService {
         Registration reg = registrationRepository
                 .findByLectureIdAndStudentIdAndGroupId(lectureId, studentId, groupId).orElse(null);
         return plan(variants, s, group, lecture, reg, "حاضر", "ATTENDANCE",
-                a.getAudience(), teacherName());
+                a.getAudience(), teacher());
     }
 
     /**
@@ -458,7 +440,7 @@ public class WhatsappMessagingService {
      * That is what lets the send phase run with no connection held.
      */
     record PlannedMessage(List<WhatsappLogSender.Recipient> recipients, String body,
-            String origin, boolean asImage) {
+            String origin, Map<String, String> vars) {
     }
 
     /**
@@ -468,19 +450,20 @@ public class WhatsappMessagingService {
      */
     private PlannedMessage plan(List<MessageVariant> variants, Student s,
             Group group, Lecture lecture, Registration registration, String status, String origin,
-            MessageAudience audience, String teacher) {
+            MessageAudience audience, MessageText.Teacher teacher) {
         Map<String, String> vars = MessageText.studentVars(s, teacher);
         // The group the lesson was attended under wins over the student's own.
         MessageText.putGroup(vars, group == null ? s.getGroup() : group);
         MessageText.putLesson(vars, lecture);
         MessageText.putAttendance(vars, registration, status);
         MessageText.putExam(vars, registration, lecture);
-        vars.put("parent.name", parentName(s.getId()));
         MessageVariant picked = randomVariant(variants);
         String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
-        // Each wording carries its own image flag; honour the one that was drawn.
+        // The vars travel with the message: the rendered body is what the history
+        // records, but the send fills the template's numbered placeholders from
+        // them, and by the send phase the entities they came from are long gone.
         return new PlannedMessage(recipients(s, code, audience),
-                MessageText.render(picked.getBody(), vars), origin, picked.isSendAsImage());
+                MessageText.render(picked.getBody(), vars), origin, vars);
     }
 
     /** Renders and sends in one step. Used by the single-student automatic path. */
@@ -488,13 +471,13 @@ public class WhatsappMessagingService {
             Group group, Lecture lecture, Registration registration, String status,
             String source, String origin,
             MessageAudience audience, UUID lectureId, UUID groupId, UUID byUser, String byName,
-            String teacher) {
+            MessageText.Teacher teacher) {
         PlannedMessage m = plan(variants, s, group, lecture, registration, status, origin,
                 audience, teacher);
         boolean any = false;
         for (WhatsappLogSender.Recipient r : m.recipients()) {
             any |= logSender.logAndSend(r, m.body(), source, origin, lectureId, groupId,
-                    byUser, byName, m.asImage());
+                    byUser, byName, m.vars());
         }
         return any;
     }
@@ -522,13 +505,13 @@ public class WhatsappMessagingService {
      * <p>Deliberately NOT {@code @Transactional} any more. It used to be, and
      * that transaction covered the two slowest things the process does: the
      * openhtmltopdf render of the barcode card (CPU-bound, with a font to embed)
-     * and the multipart upload of that PDF to Green API, once per recipient. A
+     * and the upload of that PDF to WhatsApp, once per recipient. A
      * pooled connection was held across both, on the async pool, once per
      * student created - so a bulk intake of new students could occupy several
      * connections at a time doing no database work whatsoever.
      */
-    public void sendNewStudent(UUID studentId) {
-        PlannedCard planned = self.planNewStudent(studentId);
+    public void sendNewStudent(UUID studentId, UUID byUserId) {
+        PlannedCard planned = self.planNewStudent(studentId, byUserId);
         if (planned == null) {
             return;
         }
@@ -546,18 +529,55 @@ public class WhatsappMessagingService {
             card = null;
             fileName = null;
         }
+        boolean any = false;
         for (WhatsappLogSender.Recipient r : planned.recipients()) {
-            logSender.logAndSendFile(r, planned.body(), card, fileName, "SYSTEM", "NEW_STUDENT");
+            any |= logSender.logAndSendFile(r, planned.body(), card, fileName, "SYSTEM",
+                    "NEW_STUDENT", planned.vars());
+        }
+        // The card went out on its own, so this student is no longer waiting for
+        // one - the resend button must skip them exactly as it skips a student
+        // whose card was pressed by hand. Stamped only on a real delivery: a
+        // failed welcome leaves them pending, which is the point.
+        if (any) {
+            self.markBarcodeSent(planned.studentId());
+        }
+    }
+
+    /**
+     * Record that a student's barcode card reached them.
+     *
+     * <p>Its own short transaction on purpose. Every caller is a send path that
+     * is deliberately NOT transactional - they render a PDF and talk to WhatsApp,
+     * and a pooled connection has no business being held across either.
+     */
+    @Transactional
+    public void markBarcodeSent(UUID studentId) {
+        if (studentId != null) {
+            studentRepository.markBarcodeSent(studentId, java.time.OffsetDateTime.now());
         }
     }
 
     /** The welcome message and who gets it, resolved but not yet rendered or sent. */
-    record PlannedCard(List<WhatsappLogSender.Recipient> recipients, String body, UUID studentId) {
+    record PlannedCard(List<WhatsappLogSender.Recipient> recipients, String body, UUID studentId,
+            Map<String, String> vars) {
     }
 
     @Transactional(readOnly = true)
-    public PlannedCard planNewStudent(UUID studentId) {
+    public PlannedCard planNewStudent(UUID studentId, UUID byUserId) {
         if (studentId == null) {
+            return null;
+        }
+        // The switch, and it hangs off the ACCOUNT that entered the student, not
+        // the workspace. One teacher's assistants work differently from each
+        // other: whoever is on the desk taking walk-ins wants the card to leave
+        // with the student, whoever is importing last year's roster does not,
+        // and a shared setting would have each of them turning the other's off.
+        //
+        // A create with no account behind it - a self-signup, the offline replay
+        // running before anybody signed in - sends nothing. Silence is the right
+        // answer when there is no one whose preference could have said otherwise.
+        if (byUserId == null || !userRepository.findById(byUserId)
+                .map(com.center.user.entity.User::isBarcodeAutoSend).orElse(false)) {
             return null;
         }
         MessageAutomation a = automationRepository.findByType(AutomationType.NEW_STUDENT).orElse(null);
@@ -576,23 +596,31 @@ public class WhatsappMessagingService {
         if (s == null) {
             return null;
         }
-        Map<String, String> vars = MessageText.studentVars(s, teacherName());
-        vars.put("parent.name", parentName(s.getId()));
+        Map<String, String> vars = MessageText.studentVars(s, teacher());
         MessageVariant picked = randomVariant(variants);
         String body = MessageText.render(picked.getBody(), vars);
         String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
-        return new PlannedCard(recipients(s, code, a.getAudience()), body, studentId);
+        // To the STUDENT, not to the template's audience - see BARCODE_AUDIENCE.
+        return new PlannedCard(recipients(s, code, BARCODE_AUDIENCE), body, studentId, vars);
+    }
+
+    /** One barcode-card send: whether it went, to whom, and why it did not. */
+    public record BarcodeSendResult(boolean sent, String phone, String reason) {
     }
 
     /**
-     * Re-send the "new student" message + barcode card for an existing student, on
-     * the teacher's say-so (the barcode button). Uses the SAME NEW_STUDENT template
-     * and recipients the automatic welcome uses - so the manual button and the
-     * on-create message are one and the same - but skips the automatic path's
-     * enabled/once-ever guards, since this is an explicit resend.
+     * Send the barcode card to one student, on the teacher's say-so (the barcode
+     * button). Uses the SAME NEW_STUDENT text the automatic welcome uses - the
+     * manual button and the on-create message carry one message, written once -
+     * but skips the automatic path's enabled/once-ever guards, since this is an
+     * explicit resend.
+     *
+     * <p>Never throws on a refusal by WhatsApp: the caller shows the reason, and
+     * a reason a teacher can act on ("bind this type to a template") is worth
+     * more than a 500 that reads as if the system broke.
      */
-    public String sendBarcode(UUID studentId) {
-        PlannedCard planned = self.planStudentCard(studentId, AutomationType.NEW_STUDENT);
+    public BarcodeSendResult sendBarcode(UUID studentId) {
+        PlannedCard planned = self.planBarcodeCard(studentId);
         byte[] card;
         String fileName;
         try {
@@ -602,33 +630,203 @@ public class WhatsappMessagingService {
             card = null;
             fileName = null;
         }
+        boolean any = false;
         String phone = null;
+        String reason = null;
         for (WhatsappLogSender.Recipient r : planned.recipients()) {
-            logSender.logAndSendFile(r, planned.body(), card, fileName, "MANUAL", "BARCODE");
+            WhatsappLogSender.Outcome outcome = logSender.sendFile(r, planned.body(), card,
+                    fileName, "MANUAL", "BARCODE", planned.vars());
+            any |= outcome.sent();
             if (phone == null) {
                 phone = r.phone();
             }
+            if (!outcome.sent() && reason == null) {
+                reason = outcome.failureReason();
+            }
         }
-        return phone;
+        if (any) {
+            self.markBarcodeSent(studentId);
+        }
+        return new BarcodeSendResult(any, phone, any ? null : reason);
     }
 
     /**
-     * The message body + recipients for a manual student-card send, resolved from
-     * one automation template. Requires the template to be written (throws the same
-     * "write the message first" error the other manual sends do).
+     * The barcode card's text and recipient, resolved from the NEW_STUDENT
+     * template. Requires the text to be written (throws the same "write the
+     * message first" error the other manual sends do).
+     *
+     * <p>The card goes to the student - see {@link #BARCODE_AUDIENCE} - which is
+     * also who the automatic welcome sends it to, so the button and the message
+     * it repeats can never reach different people.
      */
     @Transactional(readOnly = true)
-    public PlannedCard planStudentCard(UUID studentId, AutomationType type) {
+    public PlannedCard planBarcodeCard(UUID studentId) {
         Student s = studentRepository.findById(studentId)
                 .orElseThrow(() -> new ResourceNotFoundException("الطالب غير موجود"));
-        MessageAutomation a = requireAutomation(type);
+        MessageAutomation a = requireAutomation(AutomationType.NEW_STUDENT);
         List<MessageVariant> variants = requireVariants(a);
-        Map<String, String> vars = MessageText.studentVars(s, teacherName());
-        vars.put("parent.name", parentName(s.getId()));
+        Map<String, String> vars = MessageText.studentVars(s, teacher());
         MessageVariant picked = randomVariant(variants);
         String body = MessageText.render(picked.getBody(), vars);
         String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
-        return new PlannedCard(recipients(s, code, a.getAudience()), body, studentId);
+        return new PlannedCard(recipients(s, code, BARCODE_AUDIENCE), body, studentId, vars);
+    }
+
+    // ── The barcode card, in bulk ─────────────────────────────────────────
+
+    /**
+     * How many students are still waiting for their card, and whether anything
+     * could be sent to them at all.
+     */
+    public record BarcodeBacklog(long pending, String blockedReason) {
+    }
+
+    /** One batch of the bulk send, and what is left after it. */
+    public record BarcodeBatchResult(int sent, int failed, long remaining, String blockedReason) {
+    }
+
+    /**
+     * Whether adding a student from THIS account sends them their card at once.
+     *
+     * <p>Per account, not per workspace. A teacher and their assistants share a
+     * roster but not a job: the one on the desk taking walk-ins wants the card to
+     * leave with the student, the one importing last year's list does not, and a
+     * single shared switch would have them turning each other's off - or worse,
+     * discovering mid-import that somebody already had.
+     *
+     * <p>An unauthenticated caller reads OFF. Nothing sends without an account
+     * behind it, so that is the truthful answer rather than a refusal.
+     */
+    @Transactional(readOnly = true)
+    public boolean barcodeAutoSend() {
+        UUID me = com.center.auth.security.AuthenticatedUser.currentId();
+        return me != null && userRepository.findById(me)
+                .map(com.center.user.entity.User::isBarcodeAutoSend).orElse(false);
+    }
+
+    /** Turn it on or off for the signed-in account only. */
+    @Transactional
+    public boolean setBarcodeAutoSend(boolean on) {
+        UUID me = com.center.auth.security.AuthenticatedUser.currentId();
+        if (me == null) {
+            throw new BusinessRuleException("لا يمكن حفظ الإعداد بدون تسجيل دخول");
+        }
+        com.center.user.entity.User u = userRepository.findById(me)
+                .orElseThrow(() -> new ResourceNotFoundException("الحساب غير موجود"));
+        u.setBarcodeAutoSend(on);
+        userRepository.save(u);
+        return on;
+    }
+
+    @Transactional(readOnly = true)
+    public BarcodeBacklog barcodeBacklog() {
+        return new BarcodeBacklog(studentRepository.countPendingBarcode(adminId()),
+                barcodeBlockedReason());
+    }
+
+    /**
+     * Send the card to the next {@code limit} students who have never received
+     * one, oldest student code first.
+     *
+     * <p><b>Why a batch and not "all of them".</b> Each card is an openhtmltopdf
+     * render, a media upload and a send - seconds each, and this runs the first
+     * time over a roster that has never had the button. Doing two hundred inside
+     * one HTTP request would sit past every timeout between here and the browser
+     * with nothing to show for the wait. The caller loops instead, and each round
+     * trip reports what it did, so the progress on screen is real.
+     *
+     * <p>Resuming is free and needs no cursor: a student is stamped the moment
+     * their card lands, so the next batch simply asks the same question again and
+     * gets whoever is left. A student who FAILS is deliberately not stamped and
+     * will be picked up again - which is why the caller stops when a whole batch
+     * sends nothing, rather than looping on a backlog that cannot move.
+     */
+    public BarcodeBatchResult sendPendingBarcodes(int limit) {
+        UUID admin = adminId();
+        // Asked once, before any work: with no template bound there is nothing to
+        // send with, and grinding through the roster to write one identical failed
+        // row per student would spend minutes to say what is known up front.
+        String blocked = barcodeBlockedReason();
+        if (blocked != null) {
+            return new BarcodeBatchResult(0, 0, studentRepository.countPendingBarcode(admin),
+                    blocked);
+        }
+        int sent = 0;
+        int failed = 0;
+        for (UUID studentId : studentRepository.findPendingBarcodeIds(admin, Math.max(1, limit))) {
+            try {
+                if (sendBarcode(studentId).sent()) {
+                    sent++;
+                } else {
+                    failed++;
+                }
+            } catch (ResourceNotFoundException ex) {
+                // The row went between listing the batch and reaching it. One
+                // student's disappearance is not a reason to abandon the other
+                // nineteen. A BusinessRuleException is deliberately NOT caught:
+                // every one raised here is about the workspace, not the student
+                // (the message text is not written yet), so it is true of all of
+                // them and the teacher should hear it once, straight away.
+                failed++;
+            }
+        }
+        return new BarcodeBatchResult(sent, failed, studentRepository.countPendingBarcode(admin),
+                null);
+    }
+
+    /**
+     * Send the card to exactly these students.
+     *
+     * <p>The difference from {@link #sendPendingBarcodes(int)} is who chooses the
+     * recipients. That one picks them itself, which is right for "catch everyone
+     * up" but wrong for a button whose whole purpose is that the teacher looked
+     * at a list first: if the server re-derived the batch, the send could cover
+     * someone the screen was not showing, and the preview would be decoration.
+     * Here the screen's list IS the argument.
+     *
+     * <p>Ids from another workspace resolve to nothing - the lookup behind
+     * {@link #sendBarcode(UUID)} is tenant-scoped - so a forged id is a failure
+     * for that one student, never a leak.
+     *
+     * <p>Still batched: the caller sends a slice at a time for the same reason,
+     * each card being a render, an upload and a send.
+     */
+    public BarcodeBatchResult sendBarcodes(List<UUID> ids) {
+        UUID admin = adminId();
+        String blocked = barcodeBlockedReason();
+        if (blocked != null) {
+            return new BarcodeBatchResult(0, 0, studentRepository.countPendingBarcode(admin),
+                    blocked);
+        }
+        int sent = 0;
+        int failed = 0;
+        for (UUID studentId : ids) {
+            try {
+                if (sendBarcode(studentId).sent()) {
+                    sent++;
+                } else {
+                    failed++;
+                }
+            } catch (ResourceNotFoundException ex) {
+                failed++;
+            }
+        }
+        return new BarcodeBatchResult(sent, failed, studentRepository.countPendingBarcode(admin),
+                null);
+    }
+
+    /** Why no card can be sent right now - no number, no template - or null. */
+    private String barcodeBlockedReason() {
+        // findFirst() AFTER the map, never before it. Stream.findFirst() wraps its
+        // element in Optional.of, which throws on null - and null is exactly what
+        // blockedReason() returns when the type is fine. Mapped first, this method
+        // threw a NullPointerException in the one case it was written to report:
+        // everything configured and ready to send.
+        return availability.messageTypes(adminId()).stream()
+                .filter(t -> WhatsappResponsibilityCatalog.BARCODE.equals(t.code()))
+                .findFirst()
+                .map(WhatsappResponsibilityResponse::blockedReason)
+                .orElse(null);
     }
 
     /**
@@ -649,7 +847,8 @@ public class WhatsappMessagingService {
             fileName = null;
         }
         WhatsappLogSender.Recipient r = planned.recipients().get(0);
-        logSender.logAndSendFile(r, planned.body(), pdf, fileName, "MANUAL", "REPORT");
+        logSender.logAndSendFile(r, planned.body(), pdf, fileName, "MANUAL", "REPORT",
+                planned.vars());
         return r.phone();
     }
 
@@ -666,14 +865,13 @@ public class WhatsappMessagingService {
             throw new BusinessRuleException(toParent
                     ? "لا يوجد رقم هاتف لولي الأمر" : "لا يوجد رقم هاتف للطالب");
         }
-        Map<String, String> vars = MessageText.studentVars(s, teacherName());
-        vars.put("parent.name", parentName(s.getId()));
+        Map<String, String> vars = MessageText.studentVars(s, teacher());
         MessageVariant picked = randomVariant(variants);
         String body = MessageText.render(picked.getBody(), vars);
         String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
         WhatsappLogSender.Recipient r = new WhatsappLogSender.Recipient(
                 s.getName(), phone, code, toParent ? "PARENT" : "STUDENT", s.getId());
-        return new PlannedCard(java.util.List.of(r), body, studentId);
+        return new PlannedCard(java.util.List.of(r), body, studentId, vars);
     }
 
     /**
@@ -696,7 +894,7 @@ public class WhatsappMessagingService {
         List<MessageVariant> variants = requireVariants(a);
         Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
         Group group = groupRepository.findById(groupId).orElse(null);
-        String teacher = teacherName();
+        MessageText.Teacher teacher = teacher();
         Set<UUID> already = logRepository.sentStudentIds(lectureId, "EXAM_GRADE");
 
         List<PlannedMessage> planned = new ArrayList<>();
@@ -713,28 +911,28 @@ public class WhatsappMessagingService {
     }
 
     private MessageAutomation requireAutomation(AutomationType type) {
-        return automationRepository.findByType(type).orElseThrow(() -> new BusinessRuleException(
-                "اكتب نص رسالة " + automationLabel(type) + " أولاً من صفحة الرسائل"));
+        return automationRepository.findByType(type).orElseGet(() -> self.provision(type));
     }
 
-    private static String automationLabel(AutomationType type) {
-        return switch (type) {
-            case ABSENCE -> "الغياب";
-            case EXAM_GRADE -> "درجة الاختبار";
-            case NEW_STUDENT -> "طالب جديد";
-            case REPORT -> "التقرير";
-            default -> "الحضور";
-        };
-    }
-
+    /**
+     * The wordings this type may be logged under. Never empty: a workspace that
+     * has none is provisioned one here rather than refused, since there is no
+     * longer any screen on which a person could go and write it.
+     */
     private List<MessageVariant> requireVariants(MessageAutomation a) {
-        List<MessageVariant> variants = variantRepository.findByAutomationIdOrderBySortOrder(a.getId());
-        boolean empty = variants.isEmpty()
-                || variants.stream().allMatch(v -> v.getBody() == null || v.getBody().isBlank());
-        if (empty) {
-            throw new BusinessRuleException("اكتب نص الرسالة أولاً من صفحة الرسائل");
+        List<MessageVariant> variants = bodies(a);
+        if (variants.isEmpty()) {
+            self.provision(a.getType());
+            variants = bodies(a);
         }
         return variants;
+    }
+
+    /** The type's variants that actually carry text; a blank one renders nothing. */
+    private List<MessageVariant> bodies(MessageAutomation a) {
+        return variantRepository.findByAutomationIdOrderBySortOrder(a.getId()).stream()
+                .filter(v -> v.getBody() != null && !v.getBody().isBlank())
+                .toList();
     }
 
     private static MessageVariant randomVariant(List<MessageVariant> variants) {
@@ -764,161 +962,11 @@ public class WhatsappMessagingService {
         return new AttendanceOptinResponse(enabled);
     }
 
-    /**
-     * Whether a student's parent is reachable on WhatsApp - checked before a
-     * toggle-on attendance is committed, so an unreachable number is caught up
-     * front rather than silently attended. UNKNOWN (Green API not configured or
-     * the call failed) never blocks: the caller attends and shows the reason.
-     */
-    // Not transactional: the only database work is one lookup by id, which opens
-    // its own short transaction. Wrapping the Green API round trip that follows
-    // would hold a pooled connection open for the length of someone else's
-    // network, and this is called from the registration desk on every toggle.
-    public AttendanceWhatsappCheck parentWhatsappStatus(UUID studentId) {
-        Student s = studentRepository.findById(studentId)
-                .orElseThrow(() -> new ResourceNotFoundException("الطالب غير موجود"));
-        String phone = MessageText.firstPhone(s.getParentPhones());
-        if (phone == null || phone.isBlank()) {
-            return new AttendanceWhatsappCheck("NO_PHONE", "لا يوجد رقم مسجّل لولي الأمر");
-        }
-        GreenApiClient.WhatsappCheck check = greenApiClient.checkWhatsapp(phone);
-        if (!check.checked()) {
-            return new AttendanceWhatsappCheck("UNKNOWN", "تعذّر التحقق من واتساب");
-        }
-        return new AttendanceWhatsappCheck(check.existsWhatsapp() ? "ON" : "OFF", null);
-    }
-
     // ── Manual send ───────────────────────────────────────────────────────
 
     /** One resolved recipient with its already-rendered message body. */
-    record Pending(WhatsappLogSender.Recipient recipient, String body) {}
+    record Pending(WhatsappLogSender.Recipient recipient, String body, Map<String, String> vars) {}
 
-    /**
-     * The manual broadcast. Reads its recipient list in one short transaction and
-     * then sends outside it, for the reason spelled out on
-     * {@link #sendLectureAttendance} - this is the largest burst the system
-     * produces (it can target the entire roster), so it is the one that must not
-     * hold a database connection while it talks to WhatsApp.
-     */
-    public WhatsappSendResult send(WhatsappSendRequest req, UUID sentByUserId, String sentByName) {
-        List<Pending> pending = self.planManualSend(req);
-        int sent = 0;
-        for (Pending item : pending) {
-            if (logSender.logAndSend(item.recipient(), item.body(), "MANUAL", "MANUAL",
-                    null, null, sentByUserId, sentByName, false)) {
-                sent++;
-            }
-        }
-        return new WhatsappSendResult(sent, pending.size() - sent, pending.size());
-    }
-
-    @Transactional(readOnly = true)
-    public List<Pending> planManualSend(WhatsappSendRequest req) {
-        adminId();
-        String teacher = teacherName();
-        MessageAudience audience = req.audience() == null ? MessageAudience.STUDENT : req.audience();
-
-        List<Pending> pending = new ArrayList<>();
-        Set<String> seenPhones = new HashSet<>();
-
-        for (Student s : resolveStudents(req)) {
-            Map<String, String> vars = MessageText.studentVars(s, teacher);
-            vars.put("parent.name", parentName(s.getId()));
-            String body = MessageText.render(req.body(), vars);
-            String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
-            if (audience == MessageAudience.STUDENT || audience == MessageAudience.BOTH) {
-                add(pending, seenPhones, new WhatsappLogSender.Recipient(
-                        s.getName(), MessageText.firstPhone(s.getStudentPhones()), code, "STUDENT", s.getId()), body);
-            }
-            if (audience == MessageAudience.PARENT || audience == MessageAudience.BOTH) {
-                add(pending, seenPhones, new WhatsappLogSender.Recipient(
-                        s.getName(), MessageText.firstPhone(s.getParentPhones()), code, "PARENT", s.getId()), body);
-            }
-        }
-
-        if (req.parentIds() != null && !req.parentIds().isEmpty()) {
-            for (Parent p : parentRepository.findAllById(req.parentIds())) {
-                Map<String, String> vars = MessageText.baseVars();
-                vars.putAll(MessageText.globals(teacher));
-                vars.put("parent.name", p.getName() == null ? "" : p.getName());
-                vars.put("parent.phone", p.getPhone() == null ? "" : p.getPhone());
-                String body = MessageText.render(req.body(), vars);
-                String code = p.getSerial() == null ? "" : String.valueOf(p.getSerial());
-                add(pending, seenPhones, new WhatsappLogSender.Recipient(
-                        p.getName(), p.getPhone(), code, "PARENT", null), body);
-            }
-        }
-
-        if (pending.isEmpty()) {
-            throw new BusinessRuleException("لا يوجد مستلمون مطابقون للتحديد");
-        }
-        return pending;
-    }
-
-    /** Adds a recipient, skipping a duplicate phone (a blank phone still logs a failure). */
-    private static void add(List<Pending> out, Set<String> seenPhones,
-            WhatsappLogSender.Recipient r, String body) {
-        String phone = r.phone();
-        if (phone == null || phone.isBlank() || seenPhones.add(phone)) {
-            out.add(new Pending(r, body));
-        }
-    }
-
-    /** Union of every student facet, scoped to the workspace by @TenantId. */
-    private Set<Student> resolveStudents(WhatsappSendRequest req) {
-        Set<Student> set = new LinkedHashSet<>();
-        if (req.grades() != null) {
-            for (String g : req.grades()) {
-                set.addAll(byFilter(f -> f.grade(g)));
-            }
-        }
-        if (req.groupIds() != null) {
-            for (UUID gid : req.groupIds()) {
-                set.addAll(byFilter(f -> f.groupId(gid)));
-            }
-        }
-        if (req.genders() != null) {
-            for (Gender g : req.genders()) {
-                set.addAll(byFilter(f -> f.gender(g)));
-            }
-        }
-        if (req.religions() != null) {
-            for (Religion r : req.religions()) {
-                set.addAll(byFilter(f -> f.religion(r)));
-            }
-        }
-        if (req.academicTrack() != null) {
-            set.addAll(byFilter(f -> f.academicTrack(req.academicTrack())));
-        }
-        if (req.studentIds() != null && !req.studentIds().isEmpty()) {
-            set.addAll(studentRepository.findAllById(req.studentIds()));
-        }
-        return set;
-    }
-
-    private List<Student> byFilter(UnaryOperator<FilterBuilder> b) {
-        return studentRepository.findAll(StudentSpecifications.matching(b.apply(new FilterBuilder()).build()));
-    }
-
-    /** Single-facet StudentFilter builder (mirrors the composer's own). */
-    private static final class FilterBuilder {
-        private String grade;
-        private UUID groupId;
-        private Gender gender;
-        private AcademicTrack academicTrack;
-        private Religion religion;
-
-        FilterBuilder grade(String v) { this.grade = v; return this; }
-        FilterBuilder groupId(UUID v) { this.groupId = v; return this; }
-        FilterBuilder gender(Gender v) { this.gender = v; return this; }
-        FilterBuilder academicTrack(AcademicTrack v) { this.academicTrack = v; return this; }
-        FilterBuilder religion(Religion v) { this.religion = v; return this; }
-
-        StudentFilter build() {
-            return new StudentFilter(null, null, null, null, grade, groupId, gender, academicTrack,
-                    null, religion, null);
-        }
-    }
 
     /**
      * The workspace owner - the teacher the student belongs to, NOT whoever is
@@ -926,11 +974,13 @@ public class WhatsappMessagingService {
      * message (and a barcode, a report, an invoice) carrying the teacher's name;
      * the tenant is exactly that, for an admin and an assistant alike.
      */
-    private String teacherName() {
+    private MessageText.Teacher teacher() {
         return userRepository.findById(adminId())
-                .map(u -> u.getUsername())
-                .filter(n -> n != null && !n.isBlank())
-                .orElseGet(settingsService::senderName);
+                .map(u -> new MessageText.Teacher(
+                        u.getUsername() == null || u.getUsername().isBlank()
+                                ? settingsService.senderName() : u.getUsername(),
+                        u.getOfficePhone()))
+                .orElseGet(() -> new MessageText.Teacher(settingsService.senderName(), null));
     }
 
     /**
@@ -939,25 +989,39 @@ public class WhatsappMessagingService {
      * the only place the {parent.name} variable can be filled from - and it stays
      * blank rather than guessing when no parent has linked themselves.
      */
-    private String parentName(UUID studentId) {
-        return parentLinkRepository.findByStudentIdAndStatus(studentId, LinkStatus.APPROVED).stream()
-                .findFirst()
-                .flatMap(link -> parentRepository.findById(link.getParentId()))
-                .map(Parent::getName)
-                .filter(n -> n != null && !n.isBlank())
-                .orElse("");
-    }
 
     // ── History ───────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
     public Page<WhatsappMessageLogResponse> log(Pageable pageable) {
-        return logRepository.findAllByOrderByCreatedAtDesc(pageable).map(WhatsappMessagingService::toLogResponse);
+        // The numbers are read once for the page rather than per row: a page of
+        // fifty messages usually came from two or three of them.
+        Map<UUID, String> names = new java.util.HashMap<>();
+        for (WhatsappInstance w : instances.numbers(adminId())) {
+            names.put(w.getId(), numberName(w));
+        }
+        return logRepository.findAllByOrderByCreatedAtDesc(pageable)
+                .map(m -> toLogResponse(m, names));
     }
 
-    private static WhatsappMessageLogResponse toLogResponse(WhatsappMessageLog m) {
+    private static WhatsappMessageLogResponse toLogResponse(WhatsappMessageLog m,
+            Map<UUID, String> names) {
+        UUID instanceId = m.getInstanceId();
         return new WhatsappMessageLogResponse(m.getId(), m.getRecipientName(), m.getPhone(),
                 m.getRecipientCode(), m.getRecipientType(), m.getBody(), m.getStatus(),
-                m.getFailureReason(), m.getSource(), m.getOrigin(), m.getSentByName(), m.getCreatedAt());
+                m.getFailureReason(), m.getSource(), m.getOrigin(),
+                instanceId == null ? null : names.get(instanceId),
+                m.getTemplateName(),
+                m.getSentByName(), m.getCreatedAt());
+    }
+
+    private static String numberName(WhatsappInstance w) {
+        if (w.getLabel() != null && !w.getLabel().isBlank()) {
+            return w.getLabel();
+        }
+        if (w.getDisplayName() != null && !w.getDisplayName().isBlank()) {
+            return w.getDisplayName();
+        }
+        return w.getPhone() != null && !w.getPhone().isBlank() ? "+" + w.getPhone() : "رقم واتساب";
     }
 }

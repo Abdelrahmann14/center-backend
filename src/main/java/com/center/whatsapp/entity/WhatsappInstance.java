@@ -1,4 +1,5 @@
 package com.center.whatsapp.entity;
+
 import com.center.common.entity.BaseEntity;
 
 import java.util.UUID;
@@ -11,13 +12,17 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * A Green API WhatsApp instance linked from inside the app. {@code ownerAdminId}
- * is null for the single super-admin / platform instance; a non-null owner scopes
- * an instance to one teacher (future use).
+ * One WhatsApp number the app can send through, on the platform's official
+ * WhatsApp Business Account. {@code ownerAdminId} is null for the platform's own
+ * number; a non-null owner scopes a number to one teacher.
  *
- * <p>The instance id + api token come from the Green API console once; the actual
- * phone is linked by scanning the QR code shown in the Services page, so no visit
- * to the console is needed to connect a number.
+ * <p>There is no credential on the row. Meta authenticates the BUSINESS, not the
+ * number: one token in the environment covers every number, and {@code
+ * phoneNumberId} is the address a send is aimed at.
+ *
+ * <p>{@code state} is where provisioning got to - {@code pending} (added, not yet
+ * verified), {@code verified} (code confirmed), {@code authorized} (registered and
+ * able to send). Only an authorized number is ever resolved for a send.
  */
 @Entity
 @Table(name = "whatsapp_instance")
@@ -26,28 +31,35 @@ import lombok.Setter;
 @NoArgsConstructor
 public class WhatsappInstance extends BaseEntity {
 
-    /** Null = a super-admin / platform instance. */
+    /** Null = the platform's own number rather than a teacher's. */
     @Column(name = "owner_admin_id")
     private UUID ownerAdminId;
 
-    /** Friendly name shown in the Services UI (e.g. "الرقم الأساسي"). */
+    /** Friendly name shown in the UI (e.g. "الرقم الأساسي"). */
     @Column(name = "label")
     private String label;
 
-    @Column(name = "instance_id", nullable = false)
-    private String instanceId;
+    /** Meta's id for the number - the address every send goes to. */
+    @Column(name = "phone_number_id", nullable = false)
+    private String phoneNumberId;
 
-    @Column(name = "api_token", nullable = false)
-    private String apiToken;
+    /** The WhatsApp Business Account the number was added under. */
+    @Column(name = "waba_id")
+    private String wabaId;
 
-    @Column(name = "base_url", nullable = false)
-    private String baseUrl = "https://api.green-api.com";
+    /** The name recipients see, once Meta has approved it. */
+    @Column(name = "display_name")
+    private String displayName;
 
-    /** Cached from the last state check: the linked phone, once authorized. */
+    /** GREEN | YELLOW | RED, as Meta last reported it. */
+    @Column(name = "quality_rating")
+    private String qualityRating;
+
+    /** The line itself, as Meta formats it. */
     @Column(name = "phone")
     private String phone;
 
-    /** Cached Green API state: authorized | notAuthorized | starting | ... */
+    /** pending | verified | authorized. */
     @Column(name = "state")
     private String state;
 }

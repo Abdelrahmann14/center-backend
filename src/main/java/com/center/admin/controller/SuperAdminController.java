@@ -1,13 +1,9 @@
 package com.center.admin.controller;
 
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import org.springdoc.core.annotations.ParameterObject;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -21,36 +17,21 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.center.notification.dto.BroadcastRequest;
 import com.center.admin.dto.CreateAdminRequest;
-import com.center.notification.dto.MessageTemplateCreateRequest;
-import com.center.notification.dto.MessageTemplateUpdateRequest;
 import com.center.admin.dto.ModuleToggleRequest;
 import com.center.admin.dto.PhotoUploadRequest;
-import com.center.notification.dto.SenderNameRequest;
-import com.center.admin.dto.SuperParentUpdateRequest;
-import com.center.admin.dto.SuperStudentUpdateRequest;
 import com.center.admin.dto.UpdateAdminRequest;
 import com.center.admin.dto.AdminModuleResponse;
 import com.center.admin.dto.AdminSummaryResponse;
 import com.center.admin.dto.AssistantAdminResponse;
-import com.center.notification.dto.BroadcastResult;
-import com.center.notification.dto.MessageTemplateResponse;
-import com.center.notification.dto.OutgoingMessageResponse;
-import com.center.admin.dto.ParentAdminResponse;
-import com.center.admin.dto.ParentDetailResponse;
-import com.center.admin.dto.StudentAdminResponse;
-import com.center.admin.dto.StudentDetailResponse;
-import com.center.user.dto.UserSearchResponse;
-import com.center.notification.dto.VariableResponse;
-import com.center.notification.service.MessageTemplateService;
-import com.center.settings.service.SettingsService;
 import com.center.admin.service.SuperAdminModuleService;
 import com.center.admin.service.SuperAdminService;
-import com.center.notification.service.VariableCatalog;
-import com.center.whatsapp.dto.WhatsappInstanceRequest;
 import com.center.whatsapp.dto.WhatsappLabelRequest;
+import com.center.whatsapp.dto.WhatsappAvailabilityResponse;
+import com.center.whatsapp.dto.WhatsappResponsibilityAssignRequest;
+import com.center.whatsapp.dto.WhatsappResponsibilityResponse;
 import com.center.whatsapp.dto.WhatsappStatusResponse;
+import com.center.whatsapp.service.WhatsappAvailabilityService;
 import com.center.whatsapp.service.WhatsappInstanceService;
 
 import io.swagger.v3.oas.annotations.Operation;
@@ -72,9 +53,8 @@ public class SuperAdminController {
 
     private final SuperAdminService superAdminService;
     private final SuperAdminModuleService superAdminModuleService;
-    private final SettingsService settingsService;
-    private final MessageTemplateService messageTemplateService;
     private final WhatsappInstanceService whatsapp;
+    private final WhatsappAvailabilityService whatsappAvailability;
 
     @GetMapping("/admins")
     @Operation(summary = "List every Admin with workspace counts")
@@ -82,100 +62,10 @@ public class SuperAdminController {
         return superAdminService.listAdmins(q);
     }
 
-    @GetMapping("/students")
-    @Operation(summary = "Students across all workspaces (search + filters, paginated)")
-    public Page<StudentAdminResponse> students(
-            @RequestParam(name = "q", required = false) String q,
-            @RequestParam(name = "teacherId", required = false) UUID teacherId,
-            @RequestParam(name = "grade", required = false) String grade,
-            @RequestParam(name = "gender", required = false) String gender,
-            @RequestParam(name = "registered", required = false) Boolean registered,
-            @RequestParam(name = "active", required = false) Boolean active,
-            @ParameterObject @PageableDefault(size = 25) Pageable pageable) {
-        return superAdminService.listStudents(q, teacherId, grade, gender, registered, active, pageable);
-    }
-
-    @GetMapping("/student-grades")
-    @Operation(summary = "Distinct grades across all workspaces (students filter)")
-    public List<String> studentGrades() {
-        return superAdminService.listStudentGrades();
-    }
-
-    @PutMapping("/students/{studentId}")
-    @Operation(summary = "Edit a student's core fields")
-    public void updateStudent(@PathVariable UUID studentId,
-            @Valid @RequestBody SuperStudentUpdateRequest request) {
-        superAdminService.updateStudent(studentId, request);
-    }
-
-    @DeleteMapping("/students/{studentId}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    @Operation(summary = "Permanently delete a student")
-    public void deleteStudent(@PathVariable UUID studentId) {
-        superAdminService.deleteStudent(studentId);
-    }
-
-    @GetMapping("/parents")
-    @Operation(summary = "Parents across all workspaces (name-filtered, paginated)")
-    public Page<ParentAdminResponse> parents(@RequestParam(name = "q", required = false) String q,
-            @ParameterObject @PageableDefault(size = 25) Pageable pageable) {
-        return superAdminService.listParents(q, pageable);
-    }
-
-    @PutMapping("/parents/{parentId}")
-    @Operation(summary = "Edit a parent's core fields")
-    public void updateParent(@PathVariable UUID parentId,
-            @Valid @RequestBody SuperParentUpdateRequest request) {
-        superAdminService.updateParent(parentId, request);
-    }
-
-    @DeleteMapping("/parents/{parentId}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    @Operation(summary = "Permanently delete a parent")
-    public void deleteParent(@PathVariable UUID parentId) {
-        superAdminService.deleteParent(parentId);
-    }
-
     @GetMapping("/admins/{adminId}/assistants")
     @Operation(summary = "One teacher's assistant accounts")
     public List<AssistantAdminResponse> assistants(@PathVariable UUID adminId) {
         return superAdminService.listAssistants(adminId);
-    }
-
-    @GetMapping("/students/{studentId}")
-    @Operation(summary = "One student's full profile")
-    public StudentDetailResponse student(@PathVariable UUID studentId) {
-        return superAdminService.getStudentDetail(studentId);
-    }
-
-    @GetMapping("/parents/{parentId}")
-    @Operation(summary = "One parent's full profile")
-    public ParentDetailResponse parent(@PathVariable UUID parentId) {
-        return superAdminService.getParentDetail(parentId);
-    }
-
-    @PostMapping("/students/{studentId}/deactivate")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deactivateStudent(@PathVariable UUID studentId) {
-        superAdminService.setStudentActive(studentId, false);
-    }
-
-    @PostMapping("/students/{studentId}/activate")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void activateStudent(@PathVariable UUID studentId) {
-        superAdminService.setStudentActive(studentId, true);
-    }
-
-    @PostMapping("/parents/{parentId}/deactivate")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deactivateParent(@PathVariable UUID parentId) {
-        superAdminService.setParentActive(parentId, false);
-    }
-
-    @PostMapping("/parents/{parentId}/activate")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void activateParent(@PathVariable UUID parentId) {
-        superAdminService.setParentActive(parentId, true);
     }
 
     @GetMapping("/admins/{adminId}")
@@ -189,22 +79,15 @@ public class SuperAdminController {
         superAdminService.setWhatsappSync(adminId, request.enabled());
     }
 
-    // The super admin provisions each Admin's WhatsApp numbers: they hold the
-    // Green API credentials and enter them here (instance id + token). The Admin
-    // then only sees a card to scan the QR and a field to name the number - it
-    // never sees or enters the credentials.
+    // Each Admin's numbers live on the platform's official WhatsApp account and
+    // are provisioned from the Cloud endpoints, which own the whole add ->
+    // verify -> register sequence. What is left here is naming a number and
+    // deciding which kind of message it carries.
 
     @GetMapping("/admins/{adminId}/whatsapp")
-    @Operation(summary = "One Admin's WhatsApp numbers with live state")
+    @Operation(summary = "One Admin's WhatsApp numbers")
     public List<WhatsappStatusResponse> adminWhatsapp(@PathVariable UUID adminId) {
         return whatsapp.list(adminId);
-    }
-
-    @PostMapping("/admins/{adminId}/whatsapp")
-    @Operation(summary = "Provision a WhatsApp number for an Admin (Green API credentials)")
-    public WhatsappStatusResponse addAdminWhatsapp(@PathVariable UUID adminId,
-            @Valid @RequestBody WhatsappInstanceRequest request) {
-        return whatsapp.add(adminId, request);
     }
 
     @PutMapping("/admins/{adminId}/whatsapp/{id}/label")
@@ -214,11 +97,31 @@ public class SuperAdminController {
         return whatsapp.rename(adminId, id, request.label());
     }
 
-    @DeleteMapping("/admins/{adminId}/whatsapp/{id}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    @Operation(summary = "Remove one of an Admin's WhatsApp numbers")
-    public void removeAdminWhatsapp(@PathVariable UUID adminId, @PathVariable UUID id) {
-        whatsapp.delete(adminId, id);
+    /**
+     * One Admin's message types: which number carries each, and whether each can
+     * be sent at all. The same view the Admin has of their own workspace, so a
+     * support call ("ليه رسايل الغياب مش بتخرج؟") is answered from the same facts
+     * the Admin is looking at rather than from a second, differently-computed one.
+     */
+    @GetMapping("/admins/{adminId}/whatsapp/availability")
+    @Operation(summary = "What one Admin can send right now, and through which number")
+    public WhatsappAvailabilityResponse adminWhatsappAvailability(@PathVariable UUID adminId) {
+        return whatsappAvailability.availability(adminId);
+    }
+
+    @GetMapping("/admins/{adminId}/whatsapp/responsibilities")
+    @Operation(summary = "One Admin's message types with their assigned numbers")
+    public List<WhatsappResponsibilityResponse> adminWhatsappResponsibilities(
+            @PathVariable UUID adminId) {
+        return whatsappAvailability.messageTypes(adminId);
+    }
+
+    @PutMapping("/admins/{adminId}/whatsapp/responsibilities/{code}")
+    @Operation(summary = "Assign one of an Admin's message types to one of their numbers")
+    public List<WhatsappResponsibilityResponse> assignAdminWhatsapp(@PathVariable UUID adminId,
+            @PathVariable String code, @RequestBody WhatsappResponsibilityAssignRequest request) {
+        whatsapp.assign(adminId, code, request.instanceId());
+        return whatsappAvailability.messageTypes(adminId);
     }
 
     @PostMapping("/admins")
@@ -284,88 +187,10 @@ public class SuperAdminController {
         superAdminService.clearUserPhoto(userId);
     }
 
-    @GetMapping("/users/search")
-    @Operation(summary = "Name search across all accounts (notification picker)")
-    public List<UserSearchResponse> searchUsers(@RequestParam("q") String q) {
-        return superAdminService.searchUsers(q);
-    }
-
-    @PostMapping("/notifications")
-    @Operation(summary = "Broadcast to the union of the selected recipient facets")
-    public BroadcastResult broadcast(@Valid @RequestBody BroadcastRequest request) {
-        return superAdminService.broadcast(request);
-    }
-
-    @GetMapping("/outgoing")
-    @Operation(summary = "Recent broadcasts (History panel)")
-    public List<OutgoingMessageResponse> outgoing() {
-        return superAdminService.listOutgoing();
-    }
-
-    @DeleteMapping("/outgoing/{id}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    @Operation(summary = "Delete a sent broadcast and remove it from every recipient")
-    public void deleteOutgoing(@PathVariable UUID id) {
-        superAdminService.deleteOutgoing(id);
-    }
-
-    @GetMapping("/settings/sender-name")
-    @Operation(summary = "The current notification sender name")
-    public Map<String, String> senderName() {
-        return Map.of("name", settingsService.senderName());
-    }
-
-    @PutMapping("/settings/sender-name")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    @Operation(summary = "Set the notification sender name")
-    public void setSenderName(@Valid @RequestBody SenderNameRequest request) {
-        settingsService.setSenderName(request.name());
-    }
-
-    @GetMapping("/templates")
-    @Operation(summary = "Editable system-message templates")
-    public List<MessageTemplateResponse> templates() {
-        return messageTemplateService.list();
-    }
-
-    @PutMapping("/templates/{code}")
-    @Operation(summary = "Edit one message template's text")
-    public MessageTemplateResponse updateTemplate(@PathVariable String code,
-            @Valid @RequestBody MessageTemplateUpdateRequest request) {
-        return messageTemplateService.update(code, request);
-    }
-
-    @PostMapping("/templates")
-    @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Add a custom message template")
-    public MessageTemplateResponse createTemplate(@Valid @RequestBody MessageTemplateCreateRequest request) {
-        return messageTemplateService.create(request);
-    }
-
-    @DeleteMapping("/templates/{code}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    @Operation(summary = "Delete a custom template (system templates cannot be deleted)")
-    public void deleteTemplate(@PathVariable String code) {
-        messageTemplateService.delete(code);
-    }
-
-    @PostMapping("/templates/{code}/enable")
-    @Operation(summary = "Enable a template")
-    public MessageTemplateResponse enableTemplate(@PathVariable String code) {
-        return messageTemplateService.setEnabled(code, true);
-    }
-
-    @PostMapping("/templates/{code}/disable")
-    @Operation(summary = "Disable a template")
-    public MessageTemplateResponse disableTemplate(@PathVariable String code) {
-        return messageTemplateService.setEnabled(code, false);
-    }
-
-    @GetMapping("/variables")
-    @Operation(summary = "The {placeholder} variables available to the composer")
-    public List<VariableResponse> variables() {
-        return VariableCatalog.ALL.stream()
-                .map(v -> new VariableResponse(v.key(), v.label(), v.description(), v.group(), v.example()))
-                .toList();
-    }
+    // The console does not send. There is deliberately no broadcast, no message
+    // template editor and no recipient picker here: a message to a student or a
+    // parent is a teacher acting inside their own workspace, under their own
+    // WhatsApp number, and recorded against their own tenant. A platform-wide
+    // sender would have none of that - no tenant, no number that belongs to
+    // anyone, and no teacher accountable for what went out.
 }

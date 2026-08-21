@@ -1,7 +1,6 @@
 package com.center.notification.entity;
 import com.center.common.entity.BaseEntity;
 import com.center.common.enums.NotificationType;
-import com.center.student.entity.StudentVerificationCode;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -49,31 +48,15 @@ public class Notification {
     @Column(updatable = false)
     private String sender;
 
-    /**
-     * The account behind {@link #sender}, when a real user sent it (a teacher).
-     * Null for platform messages. Only a pointer: the display name and photo are
-     * resolved when the inbox is read, so a profile edit is reflected everywhere.
-     */
-    @Column(name = "sender_user_id", updatable = false)
-    private UUID senderUserId;
-
     @Column(nullable = false, updatable = false)
     private String title;
 
     @Column(nullable = false, updatable = false)
     private String body;
 
-    /** Optional deep-link target - e.g. a parent_student_links id to act on. */
+    /** Optional deep-link target: the row the notification is about. */
     @Column(name = "link_id", updatable = false)
     private UUID linkId;
-
-    /**
-     * The super-admin broadcast this notification was produced by, or null for
-     * one-off system notifications. Lets a deleted broadcast be removed from every
-     * recipient inbox at once.
-     */
-    @Column(name = "outgoing_id", updatable = false)
-    private UUID outgoingId;
 
     @Column(name = "is_read", nullable = false)
     private boolean read;

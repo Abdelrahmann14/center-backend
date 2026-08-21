@@ -33,7 +33,4 @@ public class MessageVariant extends TenantEntity {
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
 
-    /** When true this wording is rendered to a white image and sent as a picture. */
-    @Column(name = "send_as_image", nullable = false)
-    private boolean sendAsImage;
 }

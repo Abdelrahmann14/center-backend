@@ -14,8 +14,6 @@ public interface ModuleRepository extends JpaRepository<Module, UUID> {
 
     Optional<Module> findByCode(String code);
 
-    List<Module> findAllByOrderBySortOrder();
-
     List<Module> findByActiveTrueOrderBySortOrder();
 
     /**

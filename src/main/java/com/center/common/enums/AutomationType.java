@@ -10,7 +10,9 @@ public enum AutomationType {
     ABSENCE,
 
     /** Sent once, the moment a new student is added - carries the barcode card.
-     *  The same message is re-sent on demand from a student's barcode button. */
+     *  The same message is re-sent on demand from a student's barcode button.
+     *  Always addressed to the STUDENT: the card is their own, and the code on
+     *  it is what the desk scans. Its audience setting is fixed, not offered. */
     NEW_STUDENT,
 
     /** Sent when a student's exam grade for a lesson is entered and saved. */

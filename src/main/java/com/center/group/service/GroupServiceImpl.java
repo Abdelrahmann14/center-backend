@@ -11,7 +11,6 @@ import com.center.group.dto.GroupRequest;
 import com.center.group.dto.GroupResponse;
 import com.center.group.entity.Group;
 import com.center.common.exception.BusinessRuleException;
-import com.center.common.exception.DuplicateResourceException;
 import com.center.common.exception.ResourceNotFoundException;
 import com.center.group.mapper.GroupMapper;
 import com.center.group.repository.GroupRepository;
@@ -26,7 +25,6 @@ import lombok.RequiredArgsConstructor;
 public class GroupServiceImpl implements GroupService {
 
     private static final String NOT_FOUND = "المجموعة غير موجودة";
-    private static final String DUPLICATE_SLOT = "يوجد مجموعة أخرى في نفس اليوم والوقت";
 
     private final GroupRepository groupRepository;
     private final StudentRepository studentRepository;
@@ -44,9 +42,6 @@ public class GroupServiceImpl implements GroupService {
     public GroupResponse create(GroupRequest request) {
         short day = request.dayOfWeek().shortValue();
         LocalTime start = LocalTime.parse(request.startTime());
-        if (groupRepository.existsByDayOfWeekAndStartTime(day, start)) {
-            throw new DuplicateResourceException(DUPLICATE_SLOT);
-        }
         Group group = new Group();
         apply(group, request, day, start);
         return refresh(groupRepository.save(group));
@@ -59,27 +54,16 @@ public class GroupServiceImpl implements GroupService {
                 .orElseThrow(() -> new ResourceNotFoundException(NOT_FOUND));
         short day = request.dayOfWeek().shortValue();
         LocalTime start = LocalTime.parse(request.startTime());
-        if (groupRepository.existsByDayOfWeekAndStartTimeAndIdNot(day, start, groupId)) {
-            throw new DuplicateResourceException(DUPLICATE_SLOT);
-        }
         apply(group, request, day, start);
         return refresh(groupRepository.save(group));
     }
 
-    /**
-     * The offline replay path. The slot check still runs and can still refuse:
-     * a device with no line cannot know another already took Saturday 16:00, so
-     * this is the only place that clash can surface, and it has to surface
-     * rather than one group silently landing on top of the other.
-     */
+    /** The offline replay path. */
     @Override
     @Transactional
     public GroupResponse upsert(UUID groupId, GroupRequest request) {
         short day = request.dayOfWeek().shortValue();
         LocalTime start = LocalTime.parse(request.startTime());
-        if (groupRepository.existsByDayOfWeekAndStartTimeAndIdNot(day, start, groupId)) {
-            throw new DuplicateResourceException(DUPLICATE_SLOT);
-        }
         Group group = groupRepository.findById(groupId).orElse(null);
         if (group == null) {
             group = new Group();

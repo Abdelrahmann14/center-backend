@@ -43,6 +43,21 @@ public class AuthenticatedUser implements UserDetails {
                 user.getId(), user.getUsername(), user.getPasswordHash(), user.getRole(), tenant);
     }
 
+    /**
+     * The signed-in account behind the current call, or null.
+     *
+     * <p>Null is a real answer, not a failure: startup tasks, the scheduler and
+     * the offline replay all run with no security context, and a caller that
+     * needs an account is expected to say what it does without one rather than
+     * to assume there is always somebody there.
+     */
+    public static UUID currentId() {
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder
+                        .getContext().getAuthentication();
+        return auth != null && auth.getPrincipal() instanceof AuthenticatedUser u ? u.getId() : null;
+    }
+
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
         return List.of(new SimpleGrantedAuthority(role.authority()));

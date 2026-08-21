@@ -56,7 +56,6 @@ public class StudentServiceImpl implements StudentService {
     private final StudentMapper studentMapper;
     private final com.center.google.repository.GoogleContactLinkRepository googleContactLinkRepository;
     private final org.springframework.context.ApplicationEventPublisher events;
-    private final com.center.whatsapp.service.WhatsappNumberService whatsappNumbers;
 
     @Override
     @Transactional(readOnly = true)
@@ -75,8 +74,8 @@ public class StudentServiceImpl implements StudentService {
         return new StudentResponse(r.id(), r.serial(), r.name(), r.grade(), r.school(), r.city(),
                 r.gender(), r.groupId(), r.studentPhones(), r.parentPhones(), r.religion(),
                 r.academicTrack(), r.lessonPrice(), r.isDiscounted(), r.discountReason(), r.notes(),
-                r.isActive(), r.blockReason(), r.registered(), synced, r.createdAt(), r.createdBy(),
-                r.updatedAt(), r.updatedBy());
+                r.isActive(), r.blockReason(), synced, r.barcodeSentAt(), r.createdAt(),
+                r.createdBy(), r.updatedAt(), r.updatedBy());
     }
 
     @Override
@@ -133,7 +132,8 @@ public class StudentServiceImpl implements StudentService {
         events.publishEvent(new com.center.google.event.GoogleContactEvents.StudentChanged(
                 TenantContext.get(), saved.getId()));
         events.publishEvent(new com.center.messaging.event.StudentCreatedEvent(
-                TenantContext.get(), saved.getId()));
+                TenantContext.get(), saved.getId(),
+                com.center.auth.security.AuthenticatedUser.currentId()));
         return studentMapper.toResponse(saved);
     }
 
@@ -183,15 +183,12 @@ public class StudentServiceImpl implements StudentService {
         }
         apply(student, request, isNew ? null : studentId, true);
         Student saved = studentRepository.save(student);
-        // These numbers were typed with no line to Green API, so nobody could
-        // ask about them at the time. Remember them for the background check.
-        whatsappNumbers.queue(request.parentPhones());
-        whatsappNumbers.queue(request.studentPhones());
         events.publishEvent(new com.center.google.event.GoogleContactEvents.StudentChanged(
                 TenantContext.get(), saved.getId()));
         if (isNew) {
             events.publishEvent(new com.center.messaging.event.StudentCreatedEvent(
-                    TenantContext.get(), saved.getId()));
+                    TenantContext.get(), saved.getId(),
+                    com.center.auth.security.AuthenticatedUser.currentId()));
         }
         return studentMapper.toResponse(saved);
     }

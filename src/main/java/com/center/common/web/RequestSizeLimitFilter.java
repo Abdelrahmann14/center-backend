@@ -30,7 +30,7 @@ import jakarta.servlet.http.HttpServletResponse;
  * <p>Only the declared {@code Content-Length} is checked. A chunked upload has
  * none and passes through; that is deliberate, because reading ahead to measure
  * it would mean buffering the very bytes this is meant to avoid. Every client
- * here (browser fetch, Expo, the desktop shell) sends a length.
+ * here (browser fetch, the desktop shell) sends a length.
  *
  * <p>Ordered ahead of the security filter chain so an oversized body is dropped
  * without spending a token parse or a permission lookup on it.

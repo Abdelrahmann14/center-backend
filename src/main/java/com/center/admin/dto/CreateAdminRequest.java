@@ -23,6 +23,9 @@ public record CreateAdminRequest(
          */
         @Size(max = 20) String phone,
 
+        /** Public contact number printed inside message templates. */
+        @Size(max = 20) String officePhone,
+
         @NotBlank(message = "مطلوب")
         @Size(min = ValidationRules.PASSWORD_MIN, max = ValidationRules.PASSWORD_MAX)
         String password) {

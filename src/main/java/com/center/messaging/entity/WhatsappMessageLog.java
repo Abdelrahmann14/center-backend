@@ -73,6 +73,17 @@ public class WhatsappMessageLog {
     @Column(name = "failure_reason", columnDefinition = "text")
     private String failureReason;
 
+    /**
+     * Meta's numeric error code when the send failed; null when it went.
+     *
+     * <p>Kept beside the sentence because only the code is stable enough to
+     * branch on - Meta rewords the text freely. 131026 ("message undeliverable")
+     * is the one that carries information about the RECIPIENT rather than about
+     * us, and it is what the WhatsApp-reachability answer is derived from.
+     */
+    @Column(name = "failure_code")
+    private Integer failureCode;
+
     /** SYSTEM | MANUAL. */
     @Column(nullable = false)
     private String source;
@@ -80,6 +91,39 @@ public class WhatsappMessageLog {
     /** ATTENDANCE | ABSENCE | MANUAL. */
     @Column(nullable = false)
     private String origin;
+
+    /**
+     * The number this left from, so usage can be reported per number. Null when
+     * nothing was able to send, which is to say the attempt failed before a
+     * number was chosen.
+     */
+    @Column(name = "instance_id")
+    private UUID instanceId;
+
+    /**
+     * The template that carried it, and its billing category. Copied rather than
+     * joined: a template can be renamed or deleted in WhatsApp Manager, and last
+     * month's cost report must not move when it is.
+     */
+    @Column(name = "template_name")
+    private String templateName;
+
+    @Column(name = "template_category")
+    private String templateCategory;
+
+    /**
+     * WhatsApp's own message id. It is the only handle the delivery webhook gives
+     * us, so it is what {@code delivered_at}/{@code read_at} are matched on later.
+     * Null on an attempt that never reached WhatsApp.
+     */
+    @Column(name = "wamid")
+    private String wamid;
+
+    @Column(name = "delivered_at")
+    private OffsetDateTime deliveredAt;
+
+    @Column(name = "read_at")
+    private OffsetDateTime readAt;
 
     @Column(name = "sent_by_user_id")
     private UUID sentByUserId;

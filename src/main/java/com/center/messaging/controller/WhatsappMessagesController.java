@@ -16,20 +16,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.center.auth.security.AuthenticatedUser;
-import com.center.common.enums.AutomationType;
-import com.center.common.exception.ResourceNotFoundException;
 import com.center.messaging.dto.AttendanceOptinRequest;
 import com.center.messaging.dto.AttendanceOptinResponse;
-import com.center.messaging.dto.AttendanceWhatsappCheck;
-import com.center.messaging.dto.AutomationResponse;
-import com.center.messaging.dto.AutomationUpdateRequest;
 import com.center.messaging.dto.LectureAbsentee;
 import com.center.messaging.dto.LectureMessageStatus;
 import com.center.messaging.dto.LecturePendingCounts;
-import com.center.messaging.dto.VariantResponse;
-import com.center.messaging.dto.VariantUpdateRequest;
 import com.center.messaging.dto.WhatsappMessageLogResponse;
-import com.center.messaging.dto.WhatsappSendRequest;
 import com.center.messaging.dto.WhatsappSendResult;
 import com.center.messaging.service.WhatsappMessagingService;
 
@@ -38,9 +30,13 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 /**
- * The Messages page: WhatsApp-only messaging for one workspace. Sending and the
- * history log are gated by the delegatable {@code NOTIFICATION_SEND} permission;
- * configuring the automated messages is admin-only.
+ * WhatsApp messaging for one workspace: the per-lesson send buttons and the
+ * history log, all gated by the delegatable {@code NOTIFICATION_SEND}
+ * permission.
+ *
+ * <p>Nothing here configures the wording. What leaves is an approved Meta
+ * template chosen on the platform's own screens, so a teacher has nothing to
+ * author and this controller has nothing to save.
  */
 @RestController
 @RequestMapping("/api/messaging/whatsapp")
@@ -51,15 +47,7 @@ public class WhatsappMessagesController {
 
     private final WhatsappMessagingService service;
 
-    // ── Manual send + history (NOTIFICATION_SEND) ─────────────────────────
-
-    @PostMapping("/send")
-    public WhatsappSendResult send(@Valid @RequestBody WhatsappSendRequest request,
-            @AuthenticationPrincipal AuthenticatedUser user) {
-        UUID by = user == null ? null : user.getId();
-        String byName = user == null ? null : user.getUsername();
-        return service.send(request, by, byName);
-    }
+    // ── History (NOTIFICATION_SEND) ───────────────────────────────────────
 
     @GetMapping("/log")
     public Page<WhatsappMessageLogResponse> log(Pageable pageable) {
@@ -115,51 +103,10 @@ public class WhatsappMessagesController {
         return service.optin(lectureId, groupId);
     }
 
-    /** Pre-registration check: is this student's parent reachable on WhatsApp? */
-    @GetMapping("/students/{studentId}/parent-whatsapp")
-    public AttendanceWhatsappCheck parentWhatsapp(@PathVariable UUID studentId) {
-        return service.parentWhatsappStatus(studentId);
-    }
-
     @PutMapping("/lectures/{lectureId}/groups/{groupId}/attendance-optin")
     public AttendanceOptinResponse setOptin(@PathVariable UUID lectureId, @PathVariable UUID groupId,
             @Valid @RequestBody AttendanceOptinRequest request) {
         return service.setOptin(lectureId, groupId, request.enabled());
     }
 
-    // ── Automated-message config (admin only) ─────────────────────────────
-
-    @GetMapping("/automations")
-    @PreAuthorize("hasRole('ADMIN')")
-    public List<AutomationResponse> automations() {
-        return service.automations();
-    }
-
-    @PutMapping("/automations/{type}")
-    @PreAuthorize("hasRole('ADMIN')")
-    public AutomationResponse updateAutomation(@PathVariable String type,
-            @Valid @RequestBody AutomationUpdateRequest request) {
-        return service.updateAutomation(parseType(type), request);
-    }
-
-    @PostMapping("/automations/{type}/generate")
-    @PreAuthorize("hasRole('ADMIN')")
-    public AutomationResponse generate(@PathVariable String type) {
-        return service.generateVariants(parseType(type));
-    }
-
-    @PutMapping("/automations/variants/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
-    public VariantResponse updateVariant(@PathVariable UUID id,
-            @Valid @RequestBody VariantUpdateRequest request) {
-        return service.updateVariant(id, request);
-    }
-
-    private static AutomationType parseType(String type) {
-        try {
-            return AutomationType.valueOf(type.toUpperCase());
-        } catch (IllegalArgumentException ex) {
-            throw new ResourceNotFoundException("نوع الرسالة غير معروف");
-        }
-    }
 }

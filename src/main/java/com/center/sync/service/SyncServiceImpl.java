@@ -20,24 +20,17 @@ import jakarta.validation.Validator;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.center.exam.dto.StudentAnswerInput;
-import com.center.exam.dto.StudentExamSubmitRequest;
 import com.center.sync.dto.SyncEntityChange;
 import com.center.sync.dto.SyncMutation;
 import com.center.sync.dto.SyncMutationResult;
 import com.center.sync.dto.SyncPullResponse;
 import com.center.sync.dto.SyncPushRequest;
 import com.center.sync.dto.SyncPushResponse;
-import com.center.common.enums.Role;
 import com.center.common.exception.BusinessRuleException;
 import com.center.common.exception.ResourceNotFoundException;
-import com.center.auth.security.AuthenticatedUser;
-import com.center.exam.service.StudentExamService;
 import com.center.student.dto.StudentRequest;
 import com.center.student.service.StudentService;
 import com.center.group.dto.GroupRequest;
@@ -87,7 +80,6 @@ public class SyncServiceImpl implements SyncService {
     private static final String ASSISTANT = "assistant";
     /** Not a row: the whole tick-list for one session, replacing what was there. */
     private static final String ASSISTANT_ATTENDANCE = "assistant_attendance";
-    private static final String EXAM_ATTEMPT = "exam_attempt";
     /** Not a row: a WhatsApp batch the user asked for while the line was down. */
     private static final String WHATSAPP_SEND = "whatsapp_send";
     private static final int MAX_PAGE = 500;
@@ -96,7 +88,6 @@ public class SyncServiceImpl implements SyncService {
     private final JdbcTemplate jdbc;
     /** Used by the pull resolvers, which bind an id LIST rather than a single id. */
     private final NamedParameterJdbcTemplate named;
-    private final StudentExamService studentExamService;
     private final SyncMutationTx mutationTx;
     private final StudentService studentService;
     private final GroupService groupService;
@@ -125,12 +116,10 @@ public class SyncServiceImpl implements SyncService {
             return new SyncPushResponse(results);
         }
 
-        boolean student = callerIsStudent();
-
         for (SyncMutation m : request.mutations()) {
             try {
                 results.add(mutationTx.run(tenant, m,
-                        (mut, firstDelivery) -> dispatch(mut, tenant, student, firstDelivery)));
+                        (mut, firstDelivery) -> dispatch(mut, tenant, firstDelivery)));
             } catch (DataIntegrityViolationException ex) {
                 // A constraint the client could not have checked offline (a
                 // missing FK target, a unique key another device already took).
@@ -155,132 +144,47 @@ public class SyncServiceImpl implements SyncService {
         return new SyncPushResponse(results);
     }
 
-    /** Route one mutation to its writer. Runs inside that mutation's own transaction. */
-    private SyncMutationResult dispatch(SyncMutation m, UUID tenant, boolean student, boolean firstDelivery) {
-        if (EXAM_ATTEMPT.equals(m.entity())) {
-            return applyExamAttempt(m, firstDelivery);
-        }
+    /**
+     * Route one mutation to its writer. Runs inside that mutation's own transaction.
+     *
+     * <p>Every entity below is workspace data authored by a teacher or one of
+     * their assistants, which is now the only kind of caller there is.
+     */
+    private SyncMutationResult dispatch(SyncMutation m, UUID tenant, boolean firstDelivery) {
         if (ATTENDANCE.equals(m.entity())) {
-            // A student may only push their own exam attempts, never attendance.
-            return student
-                    ? SyncMutationResult.rejected(m.mutationId(), m.rowId(), "غير مسموح")
-                    : applyAttendance(m, tenant, firstDelivery);
+            return applyAttendance(m, tenant, firstDelivery);
         }
-        // A student account may only author its own exam attempts; everything
-        // below is workspace data that belongs to the teacher.
         if (STUDENT.equals(m.entity())) {
-            return student
-                    ? SyncMutationResult.rejected(m.mutationId(), m.rowId(), "غير مسموح")
-                    : applyStudent(m, tenant, firstDelivery);
+            return applyStudent(m, tenant, firstDelivery);
         }
         if (GROUP.equals(m.entity())) {
-            return student
-                    ? SyncMutationResult.rejected(m.mutationId(), m.rowId(), "غير مسموح")
-                    : applyGroup(m, tenant, firstDelivery);
+            return applyGroup(m, tenant, firstDelivery);
         }
         if (CENTER.equals(m.entity())) {
-            return student
-                    ? SyncMutationResult.rejected(m.mutationId(), m.rowId(), "غير مسموح")
-                    : applyCenter(m, tenant, firstDelivery);
+            return applyCenter(m, tenant, firstDelivery);
         }
         if (LECTURE.equals(m.entity())) {
-            return student
-                    ? SyncMutationResult.rejected(m.mutationId(), m.rowId(), "غير مسموح")
-                    : applyVia(m, firstDelivery, LectureRequest.class,
-                            r -> lectureService.upsert(m.rowId(), r),
-                            () -> lectureService.delete(m.rowId()),
-                            () -> lectureRow(m.rowId(), tenant), "بيانات الحصة");
+            return applyVia(m, firstDelivery, LectureRequest.class,
+                    r -> lectureService.upsert(m.rowId(), r),
+                    () -> lectureService.delete(m.rowId()),
+                    () -> lectureRow(m.rowId(), tenant), "بيانات الحصة");
         }
         if (REGISTRATION.equals(m.entity())) {
-            return student
-                    ? SyncMutationResult.rejected(m.mutationId(), m.rowId(), "غير مسموح")
-                    : applyRegistration(m, tenant, firstDelivery);
+            return applyRegistration(m, tenant, firstDelivery);
         }
         if (WHATSAPP_SEND.equals(m.entity())) {
-            return student
-                    ? SyncMutationResult.rejected(m.mutationId(), m.rowId(), "غير مسموح")
-                    : applyWhatsappSend(m, tenant, firstDelivery);
+            return applyWhatsappSend(m, tenant, firstDelivery);
         }
         if (FINANCE_ENTRY.equals(m.entity())) {
-            return student
-                    ? SyncMutationResult.rejected(m.mutationId(), m.rowId(), "غير مسموح")
-                    : applyVia(m, firstDelivery, FinanceEntryRequest.class,
-                            r -> financeService.upsertEntry(m.rowId(), r),
-                            () -> financeService.deleteEntry(m.rowId()),
-                            () -> financeEntryRow(m.rowId(), tenant), "بيانات البند");
+            return applyVia(m, firstDelivery, FinanceEntryRequest.class,
+                    r -> financeService.upsertEntry(m.rowId(), r),
+                    () -> financeService.deleteEntry(m.rowId()),
+                    () -> financeEntryRow(m.rowId(), tenant), "بيانات البند");
         }
         if (ASSISTANT_ATTENDANCE.equals(m.entity())) {
-            return student
-                    ? SyncMutationResult.rejected(m.mutationId(), m.rowId(), "غير مسموح")
-                    : applyAssistantAttendance(m, firstDelivery);
+            return applyAssistantAttendance(m, firstDelivery);
         }
         return SyncMutationResult.rejected(m.mutationId(), m.rowId(), "نوع غير مدعوم للمزامنة");
-    }
-
-    /**
-     * Replay an offline exam submission. The idempotency ledger makes a re-delivery
-     * a no-op duplicate; on first delivery the submission is graded authoritatively
-     * (the client score is never trusted) in its OWN transaction, so a rejection
-     * cannot poison the rest of the push batch. Ownership is the authenticated
-     * student - any student_id in the payload is ignored.
-     */
-    private SyncMutationResult applyExamAttempt(SyncMutation m, boolean firstDelivery) {
-        if (!firstDelivery) {
-            return SyncMutationResult.duplicate(m.mutationId(), m.rowId(), null, 0L);
-        }
-        Map<String, Object> p = m.payload();
-        if (p == null) {
-            return SyncMutationResult.rejected(m.mutationId(), m.rowId(), "بيانات المحاولة ناقصة");
-        }
-        try {
-            UUID examId = uuid(p.get("exam_id"));
-            OffsetDateTime startedAt = p.get("started_at") == null
-                    ? null : OffsetDateTime.parse(String.valueOf(p.get("started_at")));
-            StudentExamSubmitRequest req = new StudentExamSubmitRequest(startedAt, parseAnswers(p.get("answers")));
-            studentExamService.submitOffline(examId, currentUserId(), req);
-            return SyncMutationResult.applied(m.mutationId(), m.rowId(), null, 0L);
-        } catch (BusinessRuleException | ResourceNotFoundException ex) {
-            return SyncMutationResult.rejected(m.mutationId(), m.rowId(), ex.getMessage());
-        } catch (IllegalArgumentException | DateTimeParseException ex) {
-            return SyncMutationResult.rejected(m.mutationId(), m.rowId(), "بيانات المحاولة غير صحيحة");
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<StudentAnswerInput> parseAnswers(Object raw) {
-        List<StudentAnswerInput> out = new ArrayList<>();
-        if (raw instanceof List<?> list) {
-            for (Object o : list) {
-                if (o instanceof Map<?, ?> mp) {
-                    UUID questionId = uuid(mp.get("question_id"));
-                    List<UUID> choiceIds = new ArrayList<>();
-                    if (mp.get("choice_ids") instanceof List<?> cl) {
-                        for (Object c : cl) {
-                            choiceIds.add(uuid(c));
-                        }
-                    }
-                    out.add(new StudentAnswerInput(questionId, choiceIds));
-                }
-            }
-        }
-        return out;
-    }
-
-    private static AuthenticatedUser principal() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth != null && auth.getPrincipal() instanceof AuthenticatedUser u) {
-            return u;
-        }
-        throw new BusinessRuleException("لا يوجد مستخدم للمزامنة");
-    }
-
-    private static UUID currentUserId() {
-        return principal().getId();
-    }
-
-    private static boolean callerIsStudent() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth != null && auth.getPrincipal() instanceof AuthenticatedUser u && u.getRole() == Role.STUDENT;
     }
 
     /**
@@ -442,7 +346,7 @@ public class SyncServiceImpl implements SyncService {
      * <p>Unlike every other mutation this writes no row of its own - it hands the
      * request to the external-effect outbox, whose drainer performs the send. That
      * indirection is the point: the push that carries it has only proved the
-     * BROWSER is back, and Green API may still be unreachable from here. The
+     * BROWSER is back, and WhatsApp may still be unreachable from here. The
      * outbox retries until it is not.
      *
      * <p>Double-sending is impossible on two counts: the sync ledger makes a
@@ -675,13 +579,13 @@ public class SyncServiceImpl implements SyncService {
      *
      * <p>The field names have to match {@code StudentResponse} exactly, because
      * the pages render this row directly. {@code is_active} is emitted under BOTH
-     * names: the web and mobile roster screens have read {@code active} since the
-     * feed existed, while every page reads {@code is_active} - sending only the
-     * alias made every student render as blocked.
+     * names: the roster screen has read {@code active} since the feed existed,
+     * while every page reads {@code is_active} - sending only the alias made
+     * every student render as blocked.
      *
-     * <p>{@code registered} and {@code google_synced} are derived by the REST
-     * mapper rather than stored, so they are computed here too; without them the
-     * table shows every student as having no app account and no Google contact.
+     * <p>{@code google_synced} is derived by the REST mapper rather than stored,
+     * so it is computed here too; without it the table shows every student as
+     * having no Google contact.
      */
     private Map<UUID, Map<String, Object>> studentRows(Set<UUID> ids, UUID tenant) {
         return byId(named.queryForList(
@@ -689,7 +593,6 @@ public class SyncServiceImpl implements SyncService {
                         + "s.student_phones, s.parent_phones, s.religion, s.academic_track, "
                         + "s.lesson_price, s.is_discounted, s.notes, s.block_reason, "
                         + "s.is_active, s.is_active AS active, "
-                        + "(s.user_id IS NOT NULL) AS registered, "
                         + "EXISTS (SELECT 1 FROM google_contact_link g "
                         + "        WHERE g.admin_id = s.admin_id AND g.subject_id = s.id) AS google_synced, "
                         + "s.deleted_at::text AS deleted_at, s.version, "

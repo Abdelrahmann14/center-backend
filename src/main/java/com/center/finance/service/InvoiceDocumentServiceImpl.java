@@ -20,7 +20,7 @@ import com.center.finance.dto.InvoiceLineResponse;
 import com.center.finance.dto.InvoiceResponse;
 import com.center.user.entity.User;
 import com.center.user.repository.UserRepository;
-import com.center.whatsapp.service.GreenApiClient;
+import com.center.whatsapp.service.WhatsappDocumentSender;
 import com.openhtmltopdf.bidi.support.ICUBidiReorderer;
 import com.openhtmltopdf.bidi.support.ICUBidiSplitter;
 import com.openhtmltopdf.outputdevice.helper.BaseRendererBuilder;
@@ -48,7 +48,7 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
 
     private final FinanceService financeService;
     private final UserRepository userRepository;
-    private final GreenApiClient greenApi;
+    private final WhatsappDocumentSender documents;
 
     /** Reaches {@code invoiceHtml}'s transaction; a {@code this.} call would not. */
     @org.springframework.beans.factory.annotation.Autowired
@@ -119,7 +119,7 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
 
     /**
      * Deliberately NOT transactional. It renders a PDF and then uploads it to
-     * Green API; both were previously inside a read transaction, so a pooled
+     * WhatsApp; both were previously inside a read transaction, so a pooled
      * connection was held across a multipart upload to a third party. Each read
      * below opens its own short transaction instead - the same reasoning as the
      * student report and barcode senders.
@@ -137,8 +137,8 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
         byte[] pdf = renderPdf(lectureId, groupId, sessionDate);
         // The session (lesson/stage/group/date) is already spelled out in the file
         // name, so the accompanying message stays generic and repeats none of it.
-        greenApi.sendDocument(phone, pdf, fileName(lectureId, groupId, sessionDate),
-                "الفاتورة المالية للحصة", "INVOICE");
+        documents.send(phone, pdf, fileName(lectureId, groupId, sessionDate),
+                "الفاتورة المالية للحصة", "INVOICE", null);
         return phone;
     }
 
@@ -170,13 +170,13 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
                 .append(teacherNameCell(teacher))
                 .append("<td class=\"hb-title\">")
                 .append("<div class=\"title\">").append(esc(i.lectureName())).append("</div>")
-                .append("<div class=\"sub\">").append(esc(i.sessionDate().format(DATE)))
+                .append("<div class=\"sub\">").append(esc(com.center.common.util.ArabicFormat.digits(i.sessionDate().format(DATE))))
                 .append(" · ").append(esc(i.groupLabel())).append("</div>")
                 .append("</td>")
                 .append("</tr></tbody></table></div>");
 
         b.append("<div class=\"section\">بيانات الحصة</div><table class=\"info\"><tbody>")
-                .append(infoRow("الحصة", i.lectureName(), "التاريخ", i.sessionDate().format(DATE)))
+                .append(infoRow("الحصة", i.lectureName(), "التاريخ", com.center.common.util.ArabicFormat.digits(i.sessionDate().format(DATE))))
                 .append(infoRow("المجموعة", i.groupLabel(), "السنتر", i.centerName()))
                 .append(infoRow("الصف", i.grade(), "عدد طلاب المجموعة", String.valueOf(i.students())))
                 .append(infoRow("الحاضرون", String.valueOf(i.attended()),
@@ -284,7 +284,8 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
 
     /** Whole pounds, bare. The document is in EGP throughout, so it never says so. */
     private static String money(BigDecimal v) {
-        return v == null ? "0" : v.setScale(0, java.math.RoundingMode.CEILING).toPlainString();
+        return com.center.common.util.ArabicFormat.digits(
+                v == null ? "0" : v.setScale(0, java.math.RoundingMode.CEILING).toPlainString());
     }
 
     private static String plain(BigDecimal v) {

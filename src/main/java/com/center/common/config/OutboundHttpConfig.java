@@ -16,7 +16,7 @@ import org.springframework.web.client.RestClient;
  * <p>They exist because {@code RestClient.create()} has NO timeouts: a call that
  * connects and then never answers stays open forever. That is not theoretical -
  * every one of these calls is made from a request thread or from the scheduler,
- * and several are made while a database transaction is open. One hung Green API
+ * and several are made while a database transaction is open. One hung WhatsApp
  * socket used to be enough to pin a Tomcat thread and a Hikari connection until
  * the process was restarted, and a hang inside a scheduled job silently stopped
  * EVERY background job, because they share one scheduler thread.
@@ -32,7 +32,7 @@ import org.springframework.web.client.RestClient;
 @Configuration
 public class OutboundHttpConfig {
 
-    /** Green API, Google, Expo: fast services, short leash. */
+    /** Meta and Google: fast services, short leash. */
     public static final String EXTERNAL = "externalRestClient";
 
     /** The AI variant generator: a completion is slow by nature. */

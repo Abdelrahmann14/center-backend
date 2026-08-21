@@ -160,13 +160,55 @@ app:
     # token and restore it on launch, so the token must outlive the app install.
     ttl-hours: ${JWT_TTL_HOURS:87600}
 
-  green-api:
-    # WhatsApp delivery for student registration codes. Credentials live in .env.
-    base-url: ${GREEN_API_BASE_URL:https://api.green-api.com}
-    instance-id: ${GREEN_API_INSTANCE_ID:}
-    api-token: ${GREEN_API_TOKEN:}
-    # When false the code is logged instead of sent — local testing only.
-    enabled: ${GREEN_API_ENABLED:true}
+  meta:
+    # WhatsApp Cloud API (the official one, hosted by Meta) — the only way this
+    # system sends WhatsApp. A blank token means no message can go out at all, and
+    # every send button in the app reports itself unavailable rather than failing.
+    #
+    # Pin the Graph version. Meta ships breaking changes between versions and
+    # keeps each one alive for ~2 years; "whatever is newest" is how a working
+    # integration breaks on a morning nobody deployed anything.
+    api-version: ${META_API_VERSION:v26.0}
+    waba-id: ${META_WABA_ID:}
+    app-id: ${META_APP_ID:}
+    app-secret: ${META_APP_SECRET:}
+    access-token: ${META_ACCESS_TOKEN:}
+    webhook-verify-token: ${META_WEBHOOK_VERIFY_TOKEN:}
+    enabled: ${META_ENABLED:true}
+    # What Meta bills per message, by template category, in USD. These are the
+    # Egypt rates at the time of writing and they DO change - the dashboard calls
+    # anything computed from them "تقديري" for that reason. Override per country.
+    #
+    # Read them off WhatsApp Manager -> Insights -> Message pricing, and correct
+    # them here when Meta republishes. A stale rate does not break anything, it
+    # just makes the cost report quietly wrong in one direction - utility sat at
+    # 0.0104 here long after Meta had dropped it to 0.0036, so every month's
+    # figure read almost three times what was actually billed.
+    rates:
+      marketing: ${META_RATE_MARKETING:0.0736}
+      # Egypt, verified against the Meta rate card on 2026-08-21.
+      utility: ${META_RATE_UTILITY:0.0036}
+      authentication: ${META_RATE_AUTH:0.0125}
+      # A reply sent inside the customer's own 24-hour window costs nothing.
+      service: ${META_RATE_SERVICE:0}
+
+  number-check:
+    # Green API, and ONLY for asking "is this number on WhatsApp".
+    #
+    # Nothing is sent through it - no message, no card, no template. Every
+    # message this system sends goes through Meta. Green is here because the
+    # official API has no endpoint that answers this question and Meta will not
+    # add one, and knowing a guardian is unreachable BEFORE the term starts is
+    # worth an unofficial client that never touches a message.
+    #
+    # One instance for the whole platform: the answer is a property of the
+    # number, so it is the same for every teacher and the cache is shared.
+    # Blank credentials disable the check; nothing else stops working.
+    base-url: ${GREEN_CHECK_BASE_URL:https://api.green-api.com}
+    instance-id: ${GREEN_CHECK_INSTANCE_ID:}
+    token: ${GREEN_CHECK_TOKEN:}
+    ttl: ${GREEN_CHECK_TTL:P30D}
+    enabled: ${GREEN_CHECK_ENABLED:true}
 
   google:
     # Google Contacts (People API) sync. OAuth client from .env; the secret must
@@ -174,19 +216,6 @@ app:
     client-id: ${GOOGLE_CLIENT_ID:}
     client-secret: ${GOOGLE_CLIENT_SECRET:}
     redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:5174/}
-
-  ai:
-    # AI message-variant generation via an OpenAI-compatible API (Groq). The API
-    # key is a secret and lives in .env; blank turns the feature off.
-    #
-    # The model must be one the key's Groq account can actually serve - a
-    # decommissioned or unavailable id returns 404 model_not_found and the whole
-    # feature fails. Groq rotates its lineup, so check the account's /v1/models if
-    # generation starts erroring, and override with AI_MODEL if needed.
-    base-url: ${AI_BASE_URL:https://api.groq.com/openai/v1}
-    api-key: ${GROQ_API_KEY:}
-    model: ${AI_MODEL:openai/gpt-oss-120b}
-    enabled: ${AI_ENABLED:true}
 
   registration:
     # Verification code lifetime and abuse limits.

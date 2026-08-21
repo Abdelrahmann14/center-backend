@@ -9,11 +9,8 @@ import java.util.UUID;
  */
 public final class GoogleContactEvents {
 
-    /** A student was created or changed (desktop add, self-registration, edit). */
+    /** A student was created or changed. */
     public record StudentChanged(UUID adminId, UUID studentId) {}
-
-    /** A parent was created/activated or changed; re-sync their linked students. */
-    public record ParentChanged(UUID parentId) {}
 
     /** A Google account was just connected; back-fill every existing student. */
     public record AccountConnected(UUID adminId) {}

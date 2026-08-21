@@ -22,7 +22,7 @@ import lombok.RequiredArgsConstructor;
  * Offline sync. Scoping comes from the caller's tenant, never from the request
  * body. Push accepts staff writes (attendance) and student exam submissions; the
  * push handler decides what each role may write. Pull streams a tenant's change
- * feed and stays staff-only - a student must never receive tenant-wide data.
+ * feed and stays staff-only.
  */
 @RestController
 @RequestMapping("/api/sync")
@@ -33,7 +33,7 @@ public class SyncController {
     private final SyncService syncService;
 
     @PostMapping("/push")
-    @PreAuthorize("hasAnyRole('USER', 'STUDENT')")
+    @PreAuthorize("hasRole('USER')")
     @Operation(summary = "Apply a batch of queued offline writes idempotently")
     public SyncPushResponse push(@Valid @RequestBody SyncPushRequest request) {
         return syncService.push(request);

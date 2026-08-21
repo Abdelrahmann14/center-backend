@@ -22,7 +22,7 @@ import com.center.student.entity.Student;
 import com.center.student.repository.StudentRepository;
 import com.center.user.entity.User;
 import com.center.user.repository.UserRepository;
-import com.center.whatsapp.service.GreenApiClient;
+import com.center.whatsapp.service.WhatsappDocumentSender;
 import com.openhtmltopdf.bidi.support.ICUBidiReorderer;
 import com.openhtmltopdf.bidi.support.ICUBidiSplitter;
 import com.openhtmltopdf.outputdevice.helper.BaseRendererBuilder;
@@ -47,12 +47,11 @@ public class StudentReportServiceImpl implements StudentReportService {
     private static final String FONT_PATH = "/fonts/NotoKufiArabic.ttf";
     private static final String FONT_FAMILY = "Noto Kufi Arabic";
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy/MM/dd");
-    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private final StudentRepository studentRepository;
     private final StudentAnalyticsService analyticsService;
     private final UserRepository userRepository;
-    private final GreenApiClient greenApi;
+    private final WhatsappDocumentSender documents;
 
     /** Reaches {@code reportHtml}'s transaction; a {@code this.} call would not. */
     @org.springframework.beans.factory.annotation.Autowired
@@ -127,7 +126,7 @@ public class StudentReportServiceImpl implements StudentReportService {
                     : "لا يوجد رقم هاتف للطالب");
         }
         byte[] pdf = renderPdf(studentId);
-        greenApi.sendDocument(phone, pdf, fileName(studentId), "تقرير الطالب: " + s.getName(), "REPORT",
+        documents.send(phone, pdf, fileName(studentId), "تقرير الطالب: " + s.getName(), "REPORT",
                 studentId);
         return phone;
     }
@@ -191,12 +190,13 @@ public class StudentReportServiceImpl implements StudentReportService {
         StringBuilder b = new StringBuilder();
         b.append("<div class=\"section\">البيانات الشخصية</div><table class=\"info\"><tbody>");
         b.append(infoRow("الاسم", s.getName(), "رقم الطالب", s.getSerial() == null ? null : String.valueOf(s.getSerial())));
-        b.append(infoRow("الصف", s.getGrade(), "الشعبة", s.getAcademicTrack() == null ? null : s.getAcademicTrack().getValue()));
-        b.append(infoRow("المدرسة", s.getSchool(), "المنطقة السكنية", s.getCity()));
-        // The same pair the barcode card carries, in place of sex and religion:
-        // which group the student sits with, and what the lesson costs them.
-        b.append(infoRow("المجموعة", groupLabel(s), "سعر الحصة", price(s)));
+        // "الشعبة" is gone - the centre stopped tracking it, so this printed an
+        // empty cell on every student. The school takes the freed half.
+        b.append(infoRow("الصف", s.getGrade(), "المدرسة", s.getSchool()));
+        // Which group the student sits with, and what the lesson costs them.
+        b.append(infoRow("المنطقة السكنية", s.getCity(), "المجموعة", groupLabel(s)));
         b.append(infoRow("هاتف الطالب", join(s.getStudentPhones()), "هاتف ولي الأمر", join(s.getParentPhones())));
+        b.append(infoRow("سعر الحصة", price(s), "", null));
         b.append("</tbody></table>");
         return b.toString();
     }
@@ -214,8 +214,8 @@ public class StudentReportServiceImpl implements StudentReportService {
                 .append(card("أعلى درجة", pct(sm.bestExamPercent())))
                 .append(card("أقل درجة", pct(sm.worstExamPercent())))
                 .append("</tr><tr>")
-                .append(card("أول حضور", sm.firstAttendance() == null ? "-" : sm.firstAttendance().format(DATE)))
-                .append(card("آخر حضور", sm.lastAttendance() == null ? "-" : sm.lastAttendance().format(DATE)))
+                .append(card("أول حضور", sm.firstAttendance() == null ? "-" : com.center.common.util.ArabicFormat.digits(sm.firstAttendance().format(DATE))))
+                .append(card("آخر حضور", sm.lastAttendance() == null ? "-" : com.center.common.util.ArabicFormat.digits(sm.lastAttendance().format(DATE))))
                 .append(card("أطول التزام متصل", num(sm.longestStreak())))
                 .append(card("ملاحظات الواجب", num(sm.homeworkIssues())))
                 .append("</tr></tbody></table>");
@@ -240,8 +240,8 @@ public class StudentReportServiceImpl implements StudentReportService {
             b.append("<tr>")
                     .append("<td>").append(i++).append("</td>")
                     .append("<td>").append(esc(e.lectureName())).append("</td>")
-                    .append("<td>").append(e.date() == null ? "—" : e.date().format(DATE)).append("</td>")
-                    .append("<td>").append(e.attendedAt() == null ? "—" : e.attendedAt().format(TIME)).append("</td>")
+                    .append("<td>").append(e.date() == null ? "—" : com.center.common.util.ArabicFormat.digits(e.date().format(DATE))).append("</td>")
+                    .append("<td>").append(e.attendedAt() == null ? "—" : com.center.common.util.ArabicFormat.time(e.attendedAt())).append("</td>")
                     .append("<td>").append(esc(e.groupName())).append("</td>")
                     .append("<td class=\"").append(e.attended() ? "ok" : "no").append("\">")
                     .append(e.attended() ? "حاضر" : "غائب").append("</td>")
@@ -334,7 +334,7 @@ public class StudentReportServiceImpl implements StudentReportService {
         if (v == null && s.getGroup() != null) {
             v = s.getGroup().getLessonPrice();
         }
-        return v == null ? null : v.stripTrailingZeros().toPlainString() + " ج.م";
+        return v == null ? null : com.center.common.util.ArabicFormat.digits(v.stripTrailingZeros().toPlainString());
     }
 
     private String card(String label, String value) {

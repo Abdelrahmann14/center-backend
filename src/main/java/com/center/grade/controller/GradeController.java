@@ -1,6 +1,7 @@
 package com.center.grade.controller;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -37,6 +38,34 @@ public class GradeController {
     @Operation(summary = "List all grades (the global master list; every role may read)")
     public List<GradeResponse> list() {
         return gradeService.findAll();
+    }
+
+    /**
+     * The grades this workspace teaches - the ones its centers price.
+     *
+     * <p>What the student form should offer. {@link #list()} stays the master
+     * list because other screens need to render a grade that is no longer taught
+     * (an old student still has one), while a form that offers it would be
+     * inviting a mistake.
+     */
+    @GetMapping("/in-use")
+    @Operation(summary = "Grades priced by this workspace's centers, in school order")
+    public List<GradeResponse> inUse() {
+        return gradeService.findInUse();
+    }
+
+    /**
+     * How many students each grade holds, platform-wide.
+     *
+     * <p>Kept off {@link #list()} rather than folded into it: that list feeds
+     * every select in the app, and a teacher reading it has no business seeing
+     * totals that span other workspaces.
+     */
+    @GetMapping("/student-counts")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Operation(summary = "Students per grade across the platform (super admin only)")
+    public Map<String, Long> studentCounts() {
+        return gradeService.studentCountsByGrade();
     }
 
     // Grades are now a global master list: only the super admin may mutate them,

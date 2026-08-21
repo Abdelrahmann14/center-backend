@@ -71,9 +71,25 @@ services:
         sync: false
       - key: GOOGLE_REDIRECT_URI
         sync: false
-      - key: GREEN_API_INSTANCE_ID
+
+      # WhatsApp Cloud API. Without these the app starts and sends NOTHING -
+      # every message reports "لم يتم إعداد واتساب". The access token is a permanent
+      # system-user token with full send + management rights: set it in the
+      # dashboard, never in this file.
+      - key: META_WABA_ID
         sync: false
-      - key: GREEN_API_TOKEN
+      - key: META_APP_ID
         sync: false
-      - key: GROQ_API_KEY
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
+
+      # Green API answers only "is this number on WhatsApp" - it sends nothing.
+      # Blank disables the check and nothing else stops working.
+      - key: GREEN_CHECK_INSTANCE_ID
+        sync: false
+      - key: GREEN_CHECK_TOKEN
         sync: false

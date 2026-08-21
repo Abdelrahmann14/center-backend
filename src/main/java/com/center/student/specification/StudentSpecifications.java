@@ -9,10 +9,6 @@ import com.center.student.entity.Student;
 import com.center.common.enums.AcademicTrack;
 import com.center.common.enums.Gender;
 import com.center.common.enums.Religion;
-import com.center.whatsapp.entity.WhatsappNumber;
-
-import jakarta.persistence.criteria.Root;
-import jakarta.persistence.criteria.Subquery;
 
 /** Composable filters for the paginated student list. */
 public final class StudentSpecifications {
@@ -31,38 +27,7 @@ public final class StudentSpecifications {
                 gender(filter.gender()),
                 academicTrack(filter.academicTrack()),
                 active(filter.active()),
-                religion(filter.religion()),
-                whatsappMissing(filter.whatsappMissing()));
-    }
-
-    /**
-     * Students holding a phone this workspace has already established is NOT on
-     * WhatsApp. A number still waiting on an answer is unanswered, not missing,
-     * and {@code isFalse} keeps it out.
-     *
-     * <p>Matched with {@code locate} against the flattened phone arrays - the
-     * same trick the search filters use, because the phones are a {@code text[]}
-     * and Criteria has no array operator. The subquery needs no tenant clause:
-     * {@link WhatsappNumber} is a {@code @TenantId} entity, so Hibernate scopes
-     * it to the current workspace by itself.
-     */
-    private static Specification<Student> whatsappMissing(Boolean missing) {
-        if (missing == null || !missing) {
-            return null;
-        }
-        return (root, query, cb) -> {
-            Subquery<UUID> sub = query.subquery(UUID.class);
-            Root<WhatsappNumber> number = sub.from(WhatsappNumber.class);
-            sub.select(number.get("id"));
-            sub.where(cb.and(
-                    cb.isFalse(number.get("hasWhatsapp")),
-                    cb.or(
-                            cb.gt(cb.locate(phonesAsText(root.get("parentPhones"), cb),
-                                    number.get("phone")), 0),
-                            cb.gt(cb.locate(phonesAsText(root.get("studentPhones"), cb),
-                                    number.get("phone")), 0))));
-            return cb.exists(sub);
-        };
+                religion(filter.religion()));
     }
 
     private static Specification<Student> religion(Religion religion) {

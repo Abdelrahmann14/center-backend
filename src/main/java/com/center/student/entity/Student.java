@@ -96,9 +96,14 @@ public class Student extends TenantEntity {
     private String blockReason;
 
     /**
-     * The login account this student claimed, once they self-register. NULL for
-     * a student record created by the teacher that nobody has claimed yet.
+     * When this student's barcode card was FIRST delivered; null while it never
+     * has been.
+     *
+     * <p>Stamped once and never moved, because the only question asked of it is
+     * "has this student got their card at least once" - the resend button skips
+     * whoever has, and a later manual send must not make an old card look new.
+     * The full history of every attempt stays in {@code wa_message_log}.
      */
-    @Column(name = "user_id")
-    private java.util.UUID userId;
+    @Column(name = "barcode_sent_at")
+    private java.time.OffsetDateTime barcodeSentAt;
 }

@@ -13,6 +13,8 @@ public record GradeResponse(
         // snake_case strategy and emit "active".
         @JsonProperty("is_active") boolean isActive,
         TrackKind trackKind,
+        /** Where it sits in the school year sequence; low first. */
+        int sortOrder,
         OffsetDateTime createdAt,
         /** Username of whoever created / last edited the row. */
         String createdBy,
