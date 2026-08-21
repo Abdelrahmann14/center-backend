@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.UnaryOperator;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,11 +40,9 @@ import com.center.messaging.dto.WhatsappSendResult;
 import com.center.whatsapp.queue.WhatsappSendQueue;
 import com.center.messaging.entity.AttendanceAutoOptin;
 import com.center.messaging.entity.MessageAutomation;
-import com.center.messaging.entity.MessageVariant;
 import com.center.messaging.entity.WhatsappMessageLog;
 import com.center.messaging.repository.AttendanceAutoOptinRepository;
 import com.center.messaging.repository.MessageAutomationRepository;
-import com.center.messaging.repository.MessageVariantRepository;
 import com.center.messaging.repository.WhatsappMessageLogRepository;
 import com.center.registration.entity.Registration;
 import com.center.registration.repository.RegistrationRepository;
@@ -59,6 +56,7 @@ import com.center.whatsapp.dto.WhatsappResponsibilityResponse;
 import com.center.whatsapp.entity.WhatsappInstance;
 import com.center.whatsapp.service.WhatsappAvailabilityService;
 import com.center.whatsapp.service.WhatsappInstanceService;
+import com.center.whatsapp.cloud.service.CloudMessageResolver;
 import com.center.whatsapp.service.WhatsappResponsibilityCatalog;
 
 import lombok.RequiredArgsConstructor;
@@ -89,7 +87,6 @@ public class WhatsappMessagingService {
     private static final MessageAudience BARCODE_AUDIENCE = MessageAudience.STUDENT;
 
     private final MessageAutomationRepository automationRepository;
-    private final MessageVariantRepository variantRepository;
     private final WhatsappMessageLogRepository logRepository;
     private final AttendanceAutoOptinRepository optinRepository;
     private final StudentRepository studentRepository;
@@ -99,6 +96,7 @@ public class WhatsappMessagingService {
     private final UserRepository userRepository;
     private final SettingsService settingsService;
     private final WhatsappLogSender logSender;
+    private final CloudMessageResolver cloudTemplates;
     private final WhatsappInstanceService instances;
     private final WhatsappAvailabilityService availability;
     private final com.center.student.service.StudentBarcodeService barcodeService;
@@ -145,6 +143,10 @@ public class WhatsappMessagingService {
      * was nothing left on it to decide. Provisioning therefore moved to the
      * first send, which is the only moment left that needs the row to exist.
      *
+     * <p>What the row holds is a SWITCH and an AUDIENCE - whether the type is
+     * live and who it goes to. It used to hold the wording too, which was the
+     * bug: the wording belongs to the approved template and nowhere else.
+     *
      * <p>In a transaction of its own because every caller is reading inside a
      * read-only one, and through {@code self} so the proxy - and therefore the
      * annotation - is actually involved.
@@ -162,62 +164,7 @@ public class WhatsappMessagingService {
             fresh.setAudience(audienceFor(type));
             return automationRepository.save(fresh);
         });
-        if (bodies(a).isEmpty()) {
-            variantRepository.save(newVariant(a.getId(), defaultBody(type), 0));
-        }
         return a;
-    }
-
-    /**
-     * What the history records for a type before anyone has said otherwise.
-     *
-     * <p>Deliberately a copy of the approved template's own wording: the text
-     * stored here is NOT what WhatsApp delivers - the template is - it is what
-     * the teacher reads back in the log. A history that paraphrases the message
-     * a parent actually got is worse than no history, so these track the
-     * templates and are the thing to update when a template's wording changes.
-     */
-    private static String defaultBody(AutomationType type) {
-        return switch (type) {
-            case ABSENCE -> """
-                    السيد ولي أمر الطالب : *{student.name}*
-                    نحيط سيادتكم علماً بأن الطالب تغيّب عن حصة *{lesson.name}* بتاريخ *{absence.date}*.
-
-                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
-                    شكرا""";
-            case NEW_STUDENT -> """
-                    تم تسجيلك في مكتب *{teacher.name}*.
-                    مرفق مع الرسالة بطاقة الباركود الخاصة بيك، الكود بتاعك هو *{student.serial}*.
-
-                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
-                    شكرا""";
-            case EXAM_GRADE -> """
-                    السيد ولي أمر الطالب : *{student.name}*
-                    نحيط سيادتكم علماً بأن الطالب حصل على *{exam.score}* من *{exam.max}* في *{exam.name}*.
-
-                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
-                    شكرا""";
-            case REPORT -> """
-                    السيد ولي أمر الطالب : *{student.name}*
-                    مرفق مع الرسالة تقرير الطالب حتى تاريخ *{date}*.
-
-                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
-                    شكرا""";
-            default -> """
-                    السيد ولي أمر الطالب : *{student.name}*
-                    نحيط سيادتكم علماً بأن الطالب حضر حصة *{lesson.name}* اليوم في تمام الساعة *{attendance.time}*.
-
-                    لأي استفسار يمكنكم مراسلتنا على رقم المكتب *{teacher.office_phone}*.
-                    شكرا""";
-        };
-    }
-
-    private static MessageVariant newVariant(UUID automationId, String body, int sortOrder) {
-        MessageVariant v = new MessageVariant();
-        v.setAutomationId(automationId);
-        v.setBody(body);
-        v.setSortOrder(sortOrder);
-        return v;
     }
 
     // ── Per-lesson attendance / absence (Lessons page buttons) ────────────
@@ -316,7 +263,7 @@ public class WhatsappMessagingService {
     @Transactional(readOnly = true)
     public List<PlannedMessage> planLectureAttendance(UUID lectureId, UUID groupId) {
         MessageAutomation a = requireAutomation(AutomationType.ATTENDANCE);
-        List<MessageVariant> variants = requireVariants(a);
+        CloudMessageResolver.Wording wording = wordingFor("ATTENDANCE");
         Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
         Group group = groupRepository.findById(groupId).orElse(null);
         MessageText.Teacher teacher = teacher();
@@ -329,7 +276,7 @@ public class WhatsappMessagingService {
             if (already.contains(s.getId())) {
                 continue;
             }
-            planned.add(plan(variants, s, group, lecture, r, "حاضر", "ATTENDANCE",
+            planned.add(plan(wording, s, group, lecture, r, "حاضر", "ATTENDANCE",
                     a.getAudience(), teacher));
         }
         return planned;
@@ -343,7 +290,7 @@ public class WhatsappMessagingService {
     @Transactional(readOnly = true)
     public List<PlannedMessage> planLectureAbsence(UUID lectureId, UUID groupId) {
         MessageAutomation a = requireAutomation(AutomationType.ABSENCE);
-        List<MessageVariant> variants = requireVariants(a);
+        CloudMessageResolver.Wording wording = wordingFor("ABSENCE");
         Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
         Group group = groupRepository.findById(groupId).orElse(null);
         MessageText.Teacher teacher = teacher();
@@ -357,7 +304,7 @@ public class WhatsappMessagingService {
             }
             // An absent student has no registration row, so there is no attendance
             // instant to quote - the attendance-time variables stay blank.
-            planned.add(plan(variants, s, group, lecture, null, "غائب", "ABSENCE",
+            planned.add(plan(wording, s, group, lecture, null, "غائب", "ABSENCE",
                     a.getAudience(), teacher));
         }
         return planned;
@@ -468,10 +415,6 @@ public class WhatsappMessagingService {
         if (a == null) {
             return null;
         }
-        List<MessageVariant> variants = variantRepository.findByAutomationIdOrderBySortOrder(a.getId());
-        if (variants.isEmpty()) {
-            return null;
-        }
         Student s = studentRepository.findById(studentId).orElse(null);
         if (s == null) {
             return null;
@@ -480,7 +423,7 @@ public class WhatsappMessagingService {
         Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
         Registration reg = registrationRepository
                 .findByLectureIdAndStudentIdAndGroupId(lectureId, studentId, groupId).orElse(null);
-        return plan(variants, s, group, lecture, reg, "حاضر", "ATTENDANCE",
+        return plan(wordingFor("ATTENDANCE"), s, group, lecture, reg, "حاضر", "ATTENDANCE",
                 a.getAudience(), teacher());
     }
 
@@ -494,11 +437,15 @@ public class WhatsappMessagingService {
     }
 
     /**
-     * Renders a random variant for one student and names every recipient the
-     * template targets (parent and/or student). Reads only - the send happens in
+     * Fills the approved template for one student and names every recipient it
+     * targets (parent and/or student). Reads only - the send happens in
      * {@link #deliver}, after the transaction that called this has closed.
+     *
+     * <p>{@code wording} is read ONCE per batch by {@link #wordingFor} and filled
+     * here per student, so a lesson of a hundred costs one template read rather
+     * than a hundred.
      */
-    private PlannedMessage plan(List<MessageVariant> variants, Student s,
+    private PlannedMessage plan(CloudMessageResolver.Wording wording, Student s,
             Group group, Lecture lecture, Registration registration, String status, String origin,
             MessageAudience audience, MessageText.Teacher teacher) {
         Map<String, String> vars = MessageText.studentVars(s, teacher);
@@ -507,29 +454,35 @@ public class WhatsappMessagingService {
         MessageText.putLesson(vars, lecture);
         MessageText.putAttendance(vars, registration, status);
         MessageText.putExam(vars, registration, lecture);
-        MessageVariant picked = randomVariant(variants);
         String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
-        // The vars travel with the message: the rendered body is what the history
-        // records, but the send fills the template's numbered placeholders from
-        // them, and by the send phase the entities they came from are long gone.
+        // The vars travel with the message: the body is what the history records,
+        // but the send fills the template's numbered placeholders from them, and
+        // by the send phase the entities they came from are long gone.
         return new PlannedMessage(recipients(s, code, audience),
-                MessageText.render(picked.getBody(), vars), origin, vars);
+                fill(wording, vars, origin), origin, vars);
     }
 
-    /** Renders and sends in one step. Used by the single-student automatic path. */
-    private boolean dispatch(List<MessageVariant> variants, Student s,
-            Group group, Lecture lecture, Registration registration, String status,
-            String source, String origin,
-            MessageAudience audience, UUID lectureId, UUID groupId, UUID byUser, String byName,
-            MessageText.Teacher teacher) {
-        PlannedMessage m = plan(variants, s, group, lecture, registration, status, origin,
-                audience, teacher);
-        boolean any = false;
-        for (WhatsappLogSender.Recipient r : m.recipients()) {
-            any |= logSender.logAndSend(r, m.body(), source, origin, lectureId, groupId,
-                    byUser, byName, m.vars());
+    /**
+     * The message as prose, for the queue row and the history.
+     *
+     * <p>A missing template is not an error here. The send itself refuses, with
+     * a sentence naming the type and telling the reader to bind it - and it
+     * refuses whether or not this guessed at some text - so the fallback only
+     * has to leave a row somebody can recognise afterwards.
+     */
+    private static String fill(CloudMessageResolver.Wording wording, Map<String, String> vars,
+            String origin) {
+        if (wording == null) {
+            return WhatsappResponsibilityCatalog.labelForOrigin(origin);
         }
-        return any;
+        return wording.fill(vars);
+    }
+
+    /** The wording bound to a message type, or null when nothing is bound yet. */
+    private CloudMessageResolver.Wording wordingFor(String origin) {
+        return cloudTemplates
+                .wordingFor(WhatsappResponsibilityCatalog.forOrigin(origin))
+                .orElse(null);
     }
 
     /** The recipients a template targets: parent, student, or both. */
@@ -634,10 +587,6 @@ public class WhatsappMessagingService {
         if (a == null || !a.isEnabled()) {
             return null;
         }
-        List<MessageVariant> variants = variantRepository.findByAutomationIdOrderBySortOrder(a.getId());
-        if (variants.isEmpty() || variants.stream().allMatch(v -> v.getBody() == null || v.getBody().isBlank())) {
-            return null;
-        }
         // Once per student, ever - a later edit must not re-send the welcome.
         if (logRepository.existsByStudentIdAndOriginAndStatus(studentId, "NEW_STUDENT", "SENT")) {
             return null;
@@ -647,8 +596,7 @@ public class WhatsappMessagingService {
             return null;
         }
         Map<String, String> vars = MessageText.studentVars(s, teacher());
-        MessageVariant picked = randomVariant(variants);
-        String body = MessageText.render(picked.getBody(), vars);
+        String body = fill(wordingFor("NEW_STUDENT"), vars, "NEW_STUDENT");
         String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
         // To the STUDENT, not to the template's audience - see BARCODE_AUDIENCE.
         return new PlannedCard(recipients(s, code, BARCODE_AUDIENCE), body, studentId, vars);
@@ -713,11 +661,9 @@ public class WhatsappMessagingService {
     public PlannedCard planBarcodeCard(UUID studentId) {
         Student s = studentRepository.findById(studentId)
                 .orElseThrow(() -> new ResourceNotFoundException("الطالب غير موجود"));
-        MessageAutomation a = requireAutomation(AutomationType.NEW_STUDENT);
-        List<MessageVariant> variants = requireVariants(a);
+        requireAutomation(AutomationType.NEW_STUDENT);
         Map<String, String> vars = MessageText.studentVars(s, teacher());
-        MessageVariant picked = randomVariant(variants);
-        String body = MessageText.render(picked.getBody(), vars);
+        String body = fill(wordingFor("BARCODE"), vars, "BARCODE");
         String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
         return new PlannedCard(recipients(s, code, BARCODE_AUDIENCE), body, studentId, vars);
     }
@@ -954,8 +900,7 @@ public class WhatsappMessagingService {
     public PlannedCard planReportCard(UUID studentId, boolean toParent) {
         Student s = studentRepository.findById(studentId)
                 .orElseThrow(() -> new ResourceNotFoundException("الطالب غير موجود"));
-        MessageAutomation a = requireAutomation(AutomationType.REPORT);
-        List<MessageVariant> variants = requireVariants(a);
+        requireAutomation(AutomationType.REPORT);
         String phone = toParent
                 ? MessageText.firstPhone(s.getParentPhones())
                 : MessageText.firstPhone(s.getStudentPhones());
@@ -964,8 +909,7 @@ public class WhatsappMessagingService {
                     ? "لا يوجد رقم هاتف لولي الأمر" : "لا يوجد رقم هاتف للطالب");
         }
         Map<String, String> vars = MessageText.studentVars(s, teacher());
-        MessageVariant picked = randomVariant(variants);
-        String body = MessageText.render(picked.getBody(), vars);
+        String body = fill(wordingFor("REPORT"), vars, "REPORT");
         String code = s.getSerial() == null ? "" : String.valueOf(s.getSerial());
         WhatsappLogSender.Recipient r = new WhatsappLogSender.Recipient(
                 s.getName(), phone, code, toParent ? "PARENT" : "STUDENT", s.getId());
@@ -989,7 +933,7 @@ public class WhatsappMessagingService {
     @Transactional(readOnly = true)
     public List<PlannedMessage> planLectureExamGrade(UUID lectureId, UUID groupId) {
         MessageAutomation a = requireAutomation(AutomationType.EXAM_GRADE);
-        List<MessageVariant> variants = requireVariants(a);
+        CloudMessageResolver.Wording wording = wordingFor("EXAM_GRADE");
         Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
         Group group = groupRepository.findById(groupId).orElse(null);
         MessageText.Teacher teacher = teacher();
@@ -1002,7 +946,7 @@ public class WhatsappMessagingService {
             if (r.getExamScore() == null || already.contains(r.getStudent().getId())) {
                 continue;
             }
-            planned.add(plan(variants, r.getStudent(), group, lecture, r, "حاضر", "EXAM_GRADE",
+            planned.add(plan(wording, r.getStudent(), group, lecture, r, "حاضر", "EXAM_GRADE",
                     a.getAudience(), teacher));
         }
         return planned;
@@ -1010,31 +954,6 @@ public class WhatsappMessagingService {
 
     private MessageAutomation requireAutomation(AutomationType type) {
         return automationRepository.findByType(type).orElseGet(() -> self.provision(type));
-    }
-
-    /**
-     * The wordings this type may be logged under. Never empty: a workspace that
-     * has none is provisioned one here rather than refused, since there is no
-     * longer any screen on which a person could go and write it.
-     */
-    private List<MessageVariant> requireVariants(MessageAutomation a) {
-        List<MessageVariant> variants = bodies(a);
-        if (variants.isEmpty()) {
-            self.provision(a.getType());
-            variants = bodies(a);
-        }
-        return variants;
-    }
-
-    /** The type's variants that actually carry text; a blank one renders nothing. */
-    private List<MessageVariant> bodies(MessageAutomation a) {
-        return variantRepository.findByAutomationIdOrderBySortOrder(a.getId()).stream()
-                .filter(v -> v.getBody() != null && !v.getBody().isBlank())
-                .toList();
-    }
-
-    private static MessageVariant randomVariant(List<MessageVariant> variants) {
-        return variants.get(ThreadLocalRandom.current().nextInt(variants.size()));
     }
 
     // ── Attendance auto-send opt-in (registration page toggle) ────────────

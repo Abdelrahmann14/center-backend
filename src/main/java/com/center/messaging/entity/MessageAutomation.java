@@ -16,7 +16,7 @@ import lombok.Setter;
 
 /**
  * One workspace's configuration for an automated WhatsApp message type. The
- * message text itself lives in {@link MessageVariant} rows (a base plus AI
+ * message text belongs to the approved Meta template (a base plus AI
  * alternatives); this row holds the switch, the audience, and - for ABSENCE - the
  * week window that decides when it fires.
  */

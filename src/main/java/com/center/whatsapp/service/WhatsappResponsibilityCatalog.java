@@ -80,6 +80,18 @@ public final class WhatsappResponsibilityCatalog {
         return origin == null ? BROADCAST : BY_ORIGIN.getOrDefault(origin, BROADCAST);
     }
 
+    /**
+     * The Arabic name of the message type an origin belongs to.
+     *
+     * <p>For the row a send leaves behind when no template is bound yet: there
+     * is no wording to record, and the type's own name at least says what was
+     * being attempted. An empty body would say nothing at all.
+     */
+    public static String labelForOrigin(String origin) {
+        Responsibility r = find(forOrigin(origin));
+        return r == null ? "رسالة" : r.label();
+    }
+
     public static boolean isValid(String code) {
         return CODES.contains(code);
     }

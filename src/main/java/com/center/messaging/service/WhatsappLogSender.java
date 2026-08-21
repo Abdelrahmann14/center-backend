@@ -237,6 +237,15 @@ public class WhatsappLogSender {
         }
         row.setTemplateName(template.name());
         row.setTemplateCategory(template.category());
+        // The history now records the TEMPLATE's own words, filled from the same
+        // values the send fills its placeholders from - not a separate copy kept
+        // somewhere else. There used to be one, in wa_message_variant, seeded
+        // from a hardcoded default and never updated when a template changed. So
+        // the teacher read one wording in the log while the parent's phone
+        // showed another, and neither of them could tell.
+        if (template.text() != null && !template.text().isBlank()) {
+            row.setBody(template.text());
+        }
 
         CloudApiClient.HeaderMedia header = null;
         if (document != null && document.length > 0) {

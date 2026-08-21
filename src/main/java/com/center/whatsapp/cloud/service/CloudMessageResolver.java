@@ -53,7 +53,97 @@ public class CloudMessageResolver {
      * @param wantsDocument  whether the template's header expects a file
      */
     public record Resolved(String name, String language, List<String> params, String headerParam,
-            String urlButtonParam, String category, boolean wantsDocument) {
+            String urlButtonParam, String category, boolean wantsDocument, String text) {
+    }
+
+    /**
+     * A template's wording, ready to be filled for any number of students.
+     *
+     * <p>This exists because the history was lying. The log's {@code body} column
+     * used to hold a SEPARATE hand-written copy of each message, kept in
+     * {@code wa_message_variant} and seeded from a hardcoded default - so a
+     * teacher read one wording in the log while the parent's phone showed
+     * another, and the two drifted the moment a template was edited. The only
+     * text that is true is the template's own, filled from the same values the
+     * send fills its placeholders from.
+     *
+     * <p>Plain data plus a pure method, deliberately: a lesson of a hundred
+     * students reads the template ONCE and fills it a hundred times in memory.
+     * Resolving per student would put two queries per recipient inside the
+     * planning transaction.
+     */
+    public record Wording(String templateName, String headerFormat, String headerText,
+            String headerVar, String bodyText, List<String> varKeys) {
+
+        /**
+         * The message as it lands: a TEXT header on its own line, then the body,
+         * with every placeholder replaced.
+         *
+         * <p>A blank value becomes a dash, matching what {@code CloudApiClient}
+         * actually sends for it - so the log shows the visible gap the parent
+         * saw, rather than a tidier sentence than the one that arrived.
+         */
+        public String fill(Map<String, String> vars) {
+            String body = bodyText == null ? "" : bodyText;
+            for (int i = 0; i < varKeys.size(); i++) {
+                String key = varKeys.get(i);
+                String value = key == null || vars == null ? null : vars.get(key);
+                body = body.replace("{{" + (i + 1) + "}}",
+                        value == null || value.isBlank() ? "-" : value);
+            }
+            if (!"TEXT".equalsIgnoreCase(headerFormat) || headerText == null
+                    || headerText.isBlank()) {
+                return body;
+            }
+            // A TEXT header takes at most one value, always {{1}} - Meta allows
+            // no more - so the template's own header variable is the whole
+            // mapping.
+            String head = headerText;
+            String value = headerVar == null || vars == null ? null : vars.get(headerVar);
+            head = head.replace("{{1}}", value == null || value.isBlank() ? "-" : value);
+            return body.isBlank() ? head : head + "\n\n" + body;
+        }
+    }
+
+    /**
+     * The wording bound to one message type, read once.
+     *
+     * <p>Empty when nothing approved carries the type, which is the same
+     * condition {@link #forCode} refuses on - so a caller that cannot get a
+     * wording also cannot send, and the two answers cannot disagree.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Wording> wordingFor(String code) {
+        return template(code).map(CloudMessageResolver::wordingOf);
+    }
+
+    /** Package-visible so the preview screen fills the same object the send does. */
+    public static Wording wordingOf(WhatsappCloudTemplate template) {
+        return new Wording(template.getName(), template.getHeaderFormat(),
+                template.getHeaderText(), template.getHeaderVar(), template.getBodyText(),
+                varKeys(template));
+    }
+
+    /** The variable filling each placeholder, position 1 first, gaps preserved. */
+    private static List<String> varKeys(WhatsappCloudTemplate row) {
+        List<String> keys = new ArrayList<>();
+        for (WhatsappCloudTemplateVar v : row.getVars()) {
+            while (keys.size() < v.getPosition() - 1) {
+                keys.add(null);
+            }
+            keys.add(v.getVarKey());
+        }
+        return keys;
+    }
+
+    /** The approved template bound to a message type for the current tenant. */
+    private Optional<WhatsappCloudTemplate> template(String code) {
+        WhatsappTypeTemplate mapping = availability.templateMapping(TenantContext.get()).get(code);
+        if (mapping == null) {
+            return Optional.empty();
+        }
+        return templates.findById(mapping.getTemplateId())
+                .filter(t -> "APPROVED".equalsIgnoreCase(t.getStatus()));
     }
 
     /**
@@ -90,7 +180,9 @@ public class CloudMessageResolver {
                 headerValue(template, vars),
                 buttonValue(template, mapping, sendingPhone),
                 template.getCategory(),
-                "DOCUMENT".equalsIgnoreCase(template.getHeaderFormat())));
+                "DOCUMENT".equalsIgnoreCase(template.getHeaderFormat()),
+                // The same words the recipient will read, for the history row.
+                wordingOf(template).fill(vars)));
     }
 
     /**
