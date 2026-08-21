@@ -26,10 +26,34 @@ Two things shape every hosting decision below:
 - Set `SPRING_PROFILES_ACTIVE=prod`. This disables Swagger and stops responses
   carrying stack traces.
 
+## Where it actually runs
+
+A Hetzner VPS, as two containers defined by `docker-compose.yml`: the API, and
+Caddy in front of it holding the TLS certificate and serving the built web app
+from `./web` on the same origin.
+
+```bash
+ssh root@178.105.84.137
+cd /root/center-backend
+git pull
+docker compose up -d --build
+docker compose logs -f api          # watch Flyway finish before walking away
+```
+
+The web app is NOT built here — `center-web/deploy-hetzner.ps1` builds it
+locally and copies `dist/` into `/root/center-backend/web`, which Caddy serves
+live from a mounted volume. No restart needed on that side.
+
+`render.yaml`, `fly.toml` and `center-web/vercel.json` are leftovers from hosts
+this project no longer uses. Nothing reads them. They are kept only because
+they document working configurations for those platforms — do not edit them
+expecting a deploy to change.
+
 ## Environment variables
 
-`.env` is for local development only — production never reads it. The host
-injects these as real environment variables.
+Production reads `.env` **in this directory on the server** — compose passes it
+straight through (`env_file: .env`). It is gitignored and should be `chmod 600`.
+The same file the app reads locally works there unchanged.
 
 | Variable | Required | Notes |
 | --- | --- | --- |
@@ -40,13 +64,14 @@ injects these as real environment variables.
 | `DB_PASSWORD` | yes | raw, **not** URL-encoded |
 | `JWT_SECRET` | yes | 32+ random chars; changing it invalidates all sessions |
 | `SPRING_PROFILES_ACTIVE` | yes | `prod` |
-| `CORS_ALLOWED_ORIGINS` | only if the frontend is on another origin | e.g. `https://center.vercel.app` |
+| `API_DOMAIN` | yes | the hostname Caddy issues the certificate for; must resolve to this server |
+| `CORS_ALLOWED_ORIGINS` | only if the frontend is on another origin | unset here — Caddy serves the app and the API on one origin |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | for contacts sync | Google Cloud Console |
 | `GOOGLE_REDIRECT_URI` | for contacts sync | the **frontend** URL, and it must match the OAuth client exactly |
 | `META_WABA_ID` / `META_APP_ID` / `META_APP_SECRET` / `META_ACCESS_TOKEN` | **yes, for WhatsApp** | blank = nothing can be sent at all |
 | `META_WEBHOOK_VERIFY_TOKEN` | for WhatsApp | any random string; Meta echoes it back on the webhook handshake |
 | `GREEN_CHECK_INSTANCE_ID` / `GREEN_CHECK_TOKEN` | optional | answers "is this number on WhatsApp"; sends nothing. Blank disables the check |
-| `PORT` | injected by the host | falls back to 8001 |
+| `PORT` | set by compose | `8001`; do not put it in `.env` |
 
 `JWT_TTL_HOURS`, the Hikari and scheduler sizes, and the HTTP timeouts all have
 working defaults in `application.yml`. Leave them alone unless something
