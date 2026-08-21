@@ -5,9 +5,11 @@ import java.util.Map;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.center.messaging.service.WhatsappReachabilityService;
+import com.center.whatsapp.check.WhatsappNumberCheckService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -32,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 public class WhatsappReachabilityController {
 
     private final WhatsappReachabilityService reachability;
+    private final WhatsappNumberCheckService numberCheck;
 
     @GetMapping("/reachability")
     @PreAuthorize("hasAnyAuthority('PERM_STUDENT_VIEW','PERM_NOTIFICATION_SEND')")
@@ -43,4 +46,25 @@ public class WhatsappReachabilityController {
         return reachability.reachability();
     }
 
+    /**
+     * One number, answered while somebody is typing it into a form.
+     *
+     * @param exists true, false, or null for "could not answer" - the service is
+     *               off, or Green did not reply. Null must be shown as unknown:
+     *               telling a receptionist a number has no WhatsApp because a
+     *               third party timed out is worse than telling them nothing
+     */
+    public record NumberCheckResponse(String phone, Boolean exists) {
+    }
+
+    @GetMapping("/check-number")
+    @PreAuthorize("hasAnyAuthority('PERM_STUDENT_CREATE','PERM_STUDENT_UPDATE',"
+            + "'PERM_STUDENT_VIEW','PERM_NOTIFICATION_SEND')")
+    @Operation(summary = "Is this one number on WhatsApp",
+            description = "Answered from the shared store when it is known, which costs "
+                    + "nothing; only a number nobody has ever asked about reaches Green. "
+                    + "Safe to call as a field is typed.")
+    public NumberCheckResponse checkNumber(@RequestParam String phone) {
+        return new NumberCheckResponse(phone, numberCheck.lookup(phone).orElse(null));
+    }
 }

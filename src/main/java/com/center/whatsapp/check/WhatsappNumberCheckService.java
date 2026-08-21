@@ -131,6 +131,37 @@ public class WhatsappNumberCheckService {
     }
 
     /**
+     * One number, answered now: from the store if it is known, otherwise by
+     * asking Green and remembering the reply.
+     *
+     * <p>This is what the add-student form calls while somebody is typing. It is
+     * cheap to call repeatedly and safe to call on every keystroke that produces
+     * a complete number: a number already answered costs a primary-key read and
+     * no network at all, and since answers never expire, the second person to
+     * type the same guardian's number pays nothing.
+     *
+     * @return true/false, or empty when the service is off or could not answer -
+     *         which the caller must show as "unknown", never as "no WhatsApp"
+     */
+    @Transactional(readOnly = true)
+    public Optional<Boolean> lookup(String phone) {
+        String key = WaPhone.local(phone);
+        if (key.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<WhatsappNumberCheck> stored = repo.findById(key);
+        if (stored.isPresent()) {
+            return Optional.of(stored.get().isExistsWhatsapp());
+        }
+        if (!client.configured()) {
+            return Optional.empty();
+        }
+        Optional<Boolean> answer = client.existsWhatsapp(key);
+        answer.ifPresent(exists -> self.save(key, exists));
+        return answer;
+    }
+
+    /**
      * Its own transaction per number: the Green calls happen outside any, and one
      * unanswerable number must not roll back the answers already earned.
      */
