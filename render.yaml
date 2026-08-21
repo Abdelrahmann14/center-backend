@@ -89,7 +89,7 @@ services:
 
       # Green API answers only "is this number on WhatsApp" - it sends nothing.
       # Blank disables the check and nothing else stops working.
-      - key: GREEN_CHECK_INSTANCE_ID
+      - key: GREEN_API_INSTANCE_ID
         sync: false
-      - key: GREEN_CHECK_TOKEN
+      - key: GREEN_API_TOKEN
         sync: false

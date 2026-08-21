@@ -43,6 +43,7 @@ public class WhatsappLogSender {
     private final CloudMessageResolver cloudTemplates;
     private final WhatsappInstanceService instances;
     private final WhatsappMessageLogRepository logRepository;
+    private final com.center.whatsapp.cloud.service.WhatsappThrottle throttle;
 
     /** One resolved recipient of a message. */
     public record Recipient(String name, String phone, String code, String type, UUID studentId) {}
@@ -250,6 +251,14 @@ public class WhatsappLogSender {
             }
             header = new CloudApiClient.HeaderMedia(mediaId, fileName, "document");
         }
+
+        // Pace here, at the single funnel every send passes through, rather than
+        // at each call site. Meta enforces two rates - 80 per second overall and
+        // one per six seconds to the same recipient - and a path that skipped
+        // this would be the one that trips them. Three siblings in a lesson
+        // share one parent's phone, which is exactly the shape of a pair-limit
+        // violation.
+        throttle.acquire(recipient.phone());
 
         CloudApiClient.SendResult result = cloudApiClient.sendTemplate(creds.phoneNumberId(),
                 recipient.phone(),

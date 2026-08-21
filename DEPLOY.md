@@ -70,7 +70,7 @@ The same file the app reads locally works there unchanged.
 | `GOOGLE_REDIRECT_URI` | for contacts sync | the **frontend** URL, and it must match the OAuth client exactly |
 | `META_WABA_ID` / `META_APP_ID` / `META_APP_SECRET` / `META_ACCESS_TOKEN` | **yes, for WhatsApp** | blank = nothing can be sent at all |
 | `META_WEBHOOK_VERIFY_TOKEN` | for WhatsApp | any random string; Meta echoes it back on the webhook handshake |
-| `GREEN_CHECK_INSTANCE_ID` / `GREEN_CHECK_TOKEN` | optional | answers "is this number on WhatsApp"; sends nothing. Blank disables the check |
+| `GREEN_API_INSTANCE_ID` / `GREEN_API_TOKEN` | optional | answers "is this number on WhatsApp"; sends nothing. Blank disables the check |
 | `PORT` | set by compose | `8001`; do not put it in `.env` |
 
 `JWT_TTL_HOURS`, the Hikari and scheduler sizes, and the HTTP timeouts all have

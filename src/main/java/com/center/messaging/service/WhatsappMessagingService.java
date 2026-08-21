@@ -38,6 +38,7 @@ import com.center.messaging.dto.LectureMessageStatus;
 import com.center.messaging.dto.LecturePendingCounts;
 import com.center.messaging.dto.WhatsappMessageLogResponse;
 import com.center.messaging.dto.WhatsappSendResult;
+import com.center.whatsapp.queue.WhatsappSendQueue;
 import com.center.messaging.entity.AttendanceAutoOptin;
 import com.center.messaging.entity.MessageAutomation;
 import com.center.messaging.entity.MessageVariant;
@@ -102,6 +103,9 @@ public class WhatsappMessagingService {
     private final WhatsappAvailabilityService availability;
     private final com.center.student.service.StudentBarcodeService barcodeService;
     private final com.center.student.service.StudentReportService reportService;
+    private final com.center.whatsapp.queue.WhatsappSendQueue sendQueue;
+    private final com.center.whatsapp.queue.WhatsappSendQueueDrainJob drainJob;
+    private final com.center.whatsapp.quota.WhatsappQuotaService quotaService;
 
     /**
      * This service through its own Spring proxy.
@@ -360,24 +364,53 @@ public class WhatsappMessagingService {
     }
 
     /**
-     * The send phase: one HTTP call per recipient, outside any transaction. A
-     * student counts as reached when at least one of their recipients accepted,
-     * which is the count the two methods above have always reported.
+     * The queue phase. Nothing is sent here.
+     *
+     * <p>This used to be the send engine: a sequential loop making one blocking
+     * HTTP call per recipient, on the request thread, with no cap of any kind. A
+     * five-hundred-student lesson was a thousand calls and five minutes, which
+     * outlived the browser's connection - and once Meta's daily ceiling was
+     * reached every remaining call came back rejected while the loop carried
+     * straight on, several hundred times. Those rejections are not free: a run
+     * of them is exactly what degrades a number's quality rating.
+     *
+     * <p>Now the roster is rendered, written to {@code wa_send_queue}, and the
+     * drain spends the allowance as it becomes available. What comes back is a
+     * promise rather than a receipt, which is why the result says how many go
+     * now and how many are waiting instead of how many succeeded.
      */
     private WhatsappSendResult deliver(List<PlannedMessage> planned, UUID byUser, String byName,
             UUID lectureId, UUID groupId) {
-        int sent = 0;
+        List<WhatsappSendQueue.Pending> rows = new ArrayList<>();
+        int noPhone = 0;
         for (PlannedMessage m : planned) {
             boolean any = false;
             for (WhatsappLogSender.Recipient r : m.recipients()) {
-                any |= logSender.logAndSend(r, m.body(), "MANUAL", m.origin(),
-                        lectureId, groupId, byUser, byName, m.vars());
+                if (r.phone() == null || r.phone().isBlank()) {
+                    continue;
+                }
+                any = true;
+                rows.add(new WhatsappSendQueue.Pending(r.phone(), r.name(), r.code(), r.type(),
+                        r.studentId(), m.body(), m.vars(), "MANUAL", m.origin(), lectureId,
+                        groupId, byUser, byName));
             }
-            if (any) {
-                sent++;
+            if (!any) {
+                // Nobody reachable. Counted now, because it is the one failure
+                // that is already certain - everything else is Meta's answer to
+                // a call that has not been made yet.
+                noPhone++;
             }
         }
-        return new WhatsappSendResult(sent, planned.size() - sent, planned.size());
+
+        WhatsappSendQueue.Enqueued q = sendQueue.enqueue(rows);
+        // Start immediately rather than waiting for the next scheduled tick: a
+        // batch that fits inside the allowance should be moving before the
+        // teacher has looked away from the button.
+        drainJob.drain();
+
+        return new WhatsappSendResult(q.sendableNow(), noPhone, planned.size(), q.batchId(),
+                q.queued(), q.duplicate(), q.sendableNow(), q.waiting(), q.nextFreeAt(),
+                q.remaining(), q.tier(), q.blocked(), q.blockedReason());
     }
 
     /**
@@ -395,9 +428,23 @@ public class WhatsappMessagingService {
         if (m == null) {
             return;
         }
+        // Through the queue like everything else. It is one message, so it will
+        // almost always leave within seconds - but it is also the highest-volume
+        // send in the product, firing on every registration at the desk, and a
+        // path that bypassed the daily allowance would be the one most likely to
+        // exhaust it without anyone noticing.
+        List<WhatsappSendQueue.Pending> rows = new ArrayList<>();
         for (WhatsappLogSender.Recipient r : m.recipients()) {
-            logSender.logAndSend(r, m.body(), "SYSTEM", m.origin(), lectureId, groupId,
-                    null, null, m.vars());
+            if (r.phone() == null || r.phone().isBlank()) {
+                continue;
+            }
+            rows.add(new WhatsappSendQueue.Pending(r.phone(), r.name(), r.code(), r.type(),
+                    r.studentId(), m.body(), m.vars(), "SYSTEM", m.origin(), lectureId, groupId,
+                    null, null));
+        }
+        if (!rows.isEmpty()) {
+            sendQueue.enqueue(rows);
+            drainJob.drain();
         }
     }
 
@@ -750,13 +797,23 @@ public class WhatsappMessagingService {
         // send with, and grinding through the roster to write one identical failed
         // row per student would spend minutes to say what is known up front.
         String blocked = barcodeBlockedReason();
+        if (blocked == null) {
+            blocked = quotaBlockedReason();
+        }
         if (blocked != null) {
             return new BarcodeBatchResult(0, 0, studentRepository.countPendingBarcode(admin),
                     blocked);
         }
         int sent = 0;
         int failed = 0;
+        long budget = barcodeBudget();
         for (UUID studentId : studentRepository.findPendingBarcodeIds(admin, Math.max(1, limit))) {
+            if (budget-- <= 0) {
+                // Out of allowance mid-batch. Stop rather than spend the rest of
+                // the run generating guaranteed rejections; the remaining count
+                // in the result already tells the caller there is more to do.
+                break;
+            }
             try {
                 if (sendBarcode(studentId).sent()) {
                     sent++;
@@ -797,13 +854,20 @@ public class WhatsappMessagingService {
     public BarcodeBatchResult sendBarcodes(List<UUID> ids) {
         UUID admin = adminId();
         String blocked = barcodeBlockedReason();
+        if (blocked == null) {
+            blocked = quotaBlockedReason();
+        }
         if (blocked != null) {
             return new BarcodeBatchResult(0, 0, studentRepository.countPendingBarcode(admin),
                     blocked);
         }
         int sent = 0;
         int failed = 0;
+        long budget = barcodeBudget();
         for (UUID studentId : ids) {
+            if (budget-- <= 0) {
+                break;
+            }
             try {
                 if (sendBarcode(studentId).sent()) {
                     sent++;
@@ -816,6 +880,37 @@ public class WhatsappMessagingService {
         }
         return new BarcodeBatchResult(sent, failed, studentRepository.countPendingBarcode(admin),
                 null);
+    }
+
+    /**
+     * Why the daily allowance cannot pay for a card right now, or null.
+     *
+     * <p>The barcode path sends synchronously - it renders a PDF, uploads it and
+     * sends a template in one breath, which the queue's rows cannot model. So it
+     * cannot be paced by the queue and has to ask the allowance directly.
+     *
+     * <p>The alternative is what the code did before: fire regardless, collect a
+     * rejection per student, and record each one as a red row. Those rejections
+     * are not free - a run of them is exactly what degrades a number's quality
+     * rating, which is the thing that decides whether the allowance ever grows.
+     */
+    private String quotaBlockedReason() {
+        var q = quotaService.current();
+        if (!q.exhausted()) {
+            return null;
+        }
+        return "تم استهلاك حصة اليوم من رسائل واتساب (" + q.used() + " من " + q.tier()
+                + "). جرّب تاني بعد ما الحصة تتجدد.";
+    }
+
+    /**
+     * How many cards the allowance still pays for.
+     *
+     * <p>Counted in NEW recipients, not messages: a student already messaged
+     * inside the rolling 24 hours costs nothing to message again.
+     */
+    private long barcodeBudget() {
+        return quotaService.current().remaining();
     }
 
     /** Why no card can be sent right now - no number, no template - or null. */

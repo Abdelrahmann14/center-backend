@@ -185,12 +185,45 @@ app:
     # 0.0104 here long after Meta had dropped it to 0.0036, so every month's
     # figure read almost three times what was actually billed.
     rates:
-      marketing: ${META_RATE_MARKETING:0.0736}
-      # Egypt, verified against the Meta rate card on 2026-08-21.
+      # Egypt, read off the Meta rate card effective 2026-07-01.
+      #
+      # marketing was 0.0736 here long after Meta dropped it to 0.0644 (Egypt got
+      # lower marketing rates on 2026-01-01), and authentication was 0.0125
+      # against a real 0.0036 - so every cost figure read roughly 3.5x what was
+      # actually billed.
+      #
+      # DIARISE 2026-09-01. From 2026-10-01 Meta charges per message for SERVICE
+      # and UTILITY messages, which are free today; the rates are published around
+      # the first of September. The `service: 0` line below expires on that date.
+      marketing: ${META_RATE_MARKETING:0.0644}
       utility: ${META_RATE_UTILITY:0.0036}
-      authentication: ${META_RATE_AUTH:0.0125}
-      # A reply sent inside the customer's own 24-hour window costs nothing.
+      authentication: ${META_RATE_AUTH:0.0036}
+      # A reply sent inside the customer's own 24-hour window costs nothing -
+      # until 2026-10-01.
       service: ${META_RATE_SERVICE:0}
+
+    # ── Sending rate and the daily allowance ────────────────────────────────
+    #
+    # Meta allows 80 messages/second per number and caps the whole BUSINESS
+    # PORTFOLIO at N unique recipients per rolling 24 hours - 250 until the
+    # business is verified, then 2,000, 10,000 and up. Every teacher's number
+    # sits in one portfolio, so they share one allowance.
+    #
+    # max-mps is far below Meta's 80 on purpose. Throughput has never been the
+    # bottleneck here (a sequential loop manages about 3), and the value of the
+    # pacer is that a rate is chosen deliberately and that there is somewhere for
+    # a 130429 to register a pause - not that it makes anything faster.
+    max-mps: ${META_MAX_MPS:8}
+    burst: ${META_BURST:16}
+    # How often the queue drain looks for work. Also kicked directly after a
+    # send button is pressed, so this is the floor on latency, not the norm.
+    drain-interval-ms: ${META_DRAIN_INTERVAL_MS:15000}
+    # Wall-clock ceiling on one drain pass, so a broadcast never holds the shared
+    # scheduler thread for its whole length.
+    drain-budget-seconds: ${META_DRAIN_BUDGET_SECONDS:45}
+    # Meta re-evaluates a messaging tier every 6 hours (it was 24 before Oct
+    # 2025), so reading it more often spends the Graph request budget for nothing.
+    quota-refresh-ms: ${META_QUOTA_REFRESH_MS:21600000}
 
   number-check:
     # Green API, and ONLY for asking "is this number on WhatsApp".
@@ -209,10 +242,18 @@ app:
     # asked about once and again only if it changes, because a roster only grows
     # and re-asking the whole thing on a timer turns a fixed cost into a
     # recurring one. WhatsappNumberCheckJob is what does the asking.
-    base-url: ${GREEN_CHECK_BASE_URL:https://api.green-api.com}
-    instance-id: ${GREEN_CHECK_INSTANCE_ID:}
-    token: ${GREEN_CHECK_TOKEN:}
-    enabled: ${GREEN_CHECK_ENABLED:true}
+    #
+    # Named GREEN_API_* and not GREEN_CHECK_*. Green used to SEND here, under
+    # GREEN_API_*, and every .env on every machine still spells it that way. When
+    # sending moved to Meta the remaining check was renamed in this file and
+    # nowhere else, so the credentials sat in .env under the old names, the app
+    # read the new ones, found blank, and disabled the check - silently, because
+    # blank is also how you turn it off on purpose. Reading the names that are
+    # actually out there is what makes existing installs work untouched.
+    base-url: ${GREEN_API_BASE_URL:https://api.green-api.com}
+    instance-id: ${GREEN_API_INSTANCE_ID:}
+    token: ${GREEN_API_TOKEN:}
+    enabled: ${GREEN_API_ENABLED:true}
 
   google:
     # Google Contacts (People API) sync. OAuth client from .env; the secret must

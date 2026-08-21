@@ -1,9 +1,7 @@
 package com.center.whatsapp.quota;
 
-import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Map;
 
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -51,10 +49,16 @@ public class WhatsappQuotaService {
      * Origins that do not count against the messaging limit.
      *
      * <p>A free-form reply inside a customer's own 24-hour window is a "service"
-     * message: Meta charges nothing for it and counts it against nothing. Billing
-     * it to the daily allowance would make the inbox eat the broadcast budget.
+     * message: Meta charges nothing for it and counts it against nothing.
+     * Billing it to the daily allowance would make the inbox eat the broadcast
+     * budget.
+     *
+     * <p>Inlined into the SQL rather than bound, because the list is a constant
+     * of this class and a bound {@code text[]} would need an explicit
+     * {@code createArrayOf} through the connection - a lot of machinery for a
+     * value that never changes at runtime.
      */
-    private static final List<String> UNCOUNTED_ORIGINS = List.of("INBOX");
+    private static final String UNCOUNTED_ORIGINS = "'INBOX'";
 
     private final JdbcTemplate jdbc;
     private final CloudApiClient cloud;
@@ -124,8 +128,8 @@ public class WhatsappQuotaService {
                  where status = 'SENT'
                    and created_at > now() - interval '24 hours'
                    and phone is not null
-                   and origin <> all (?)
-                """, Long.class, (Object) UNCOUNTED_ORIGINS.toArray(String[]::new));
+                   and origin not in (%s)
+                """.formatted(UNCOUNTED_ORIGINS), Long.class);
         return count == null ? 0L : count;
     }
 
@@ -162,7 +166,24 @@ public class WhatsappQuotaService {
         return count == null ? 0L : count;
     }
 
+    /**
+     * The stored ceiling.
+     *
+     * <p>Falls back to Meta's own starting tier rather than throwing. This is
+     * read on every send button and before every queued message; a missing row -
+     * a migration half-applied, a restored dump - must degrade to "assume the
+     * most cautious ceiling", not to a broken page and a dead queue.
+     */
     private Stored stored() {
+        try {
+            return storedRow();
+        } catch (EmptyResultDataAccessException ex) {
+            log.warn("wa_quota has no row - assuming Meta's starting tier of 250");
+            return new Stored(250, null, 10, null, null, null);
+        }
+    }
+
+    private Stored storedRow() {
         return jdbc.queryForObject("""
                 select tier, tier_label, safety_margin, quality_rating, number_status, refreshed_at
                   from wa_quota where id = true
@@ -177,45 +198,6 @@ public class WhatsappQuotaService {
 
     // ── deciding ────────────────────────────────────────────────────────────
 
-    /**
-     * How many of {@code phones} may be sent to right now.
-     *
-     * <p>Not simply {@code min(remaining, phones.size())}. Meta counts unique
-     * <em>people</em>, so a recipient already messaged in the last 24 hours costs
-     * nothing to message again - and in a school that is most of them. A lesson
-     * of 100 parents who were all told about attendance this morning consumes
-     * <b>zero</b> allowance for the absence message this afternoon, and a naive
-     * {@code min()} would refuse to send it.
-     *
-     * @return the phones that may go now, in the order given, longest-waiting
-     *         first once the caller has ordered them so
-     */
-    public List<String> admit(List<String> phones) {
-        if (phones == null || phones.isEmpty()) {
-            return List.of();
-        }
-        Quota quota = current();
-        java.util.Set<String> alreadyCounted = countedPhones(phones);
-        java.util.List<String> admitted = new java.util.ArrayList<>();
-        long budget = quota.remaining();
-        java.util.Set<String> newThisRun = new java.util.HashSet<>();
-        for (String phone : phones) {
-            boolean free = phone == null || alreadyCounted.contains(phone)
-                    || newThisRun.contains(phone);
-            if (free) {
-                admitted.add(phone);
-                continue;
-            }
-            if (budget <= 0) {
-                break;
-            }
-            budget--;
-            newThisRun.add(phone);
-            admitted.add(phone);
-        }
-        return admitted;
-    }
-
     /** Which of these numbers are already inside the rolling window, and so free. */
     public java.util.Set<String> countedPhones(List<String> phones) {
         if (phones == null || phones.isEmpty()) {
@@ -226,13 +208,14 @@ public class WhatsappQuotaService {
         if (distinct.isEmpty()) {
             return java.util.Set.of();
         }
+        String placeholders = String.join(",", java.util.Collections.nCopies(distinct.size(), "?"));
         List<String> found = jdbc.queryForList("""
                 select distinct phone
                   from wa_message_log
                  where status = 'SENT'
                    and created_at > now() - interval '24 hours'
-                   and phone = any (?)
-                """, String.class, (Object) distinct.toArray(String[]::new));
+                   and phone in (%s)
+                """.formatted(placeholders), String.class, distinct.toArray());
         return new java.util.HashSet<>(found);
     }
 
@@ -331,9 +314,4 @@ public class WhatsappQuotaService {
         log.info("WhatsApp messaging limit changed to {} ({})", tier, label);
     }
 
-    /** For the dashboard: the whole picture in one map, snake_case for the wire. */
-    public Map<String, Object> snapshot() {
-        Quota q = current();
-        return Map.of("quota", q, "paused_for_seconds", Duration.ZERO.toSeconds());
-    }
 }

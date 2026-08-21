@@ -13,8 +13,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.center.common.tenant.TenantContext;
 import com.center.common.tenant.TenantScopedExecutor;
@@ -163,7 +161,9 @@ public class WhatsappSendQueueDrainJob {
                 continue;
             }
 
-            throttle.acquire(row.phone());
+            // No acquire() here: WhatsappLogSender paces every send at the one
+            // funnel they all pass through, so doing it again would double the
+            // gap between messages.
             WhatsappLogSender.Delivery result = deliver(row);
 
             if (result.sent()) {
@@ -236,9 +236,14 @@ public class WhatsappSendQueueDrainJob {
      * <p>Un-tenanted on purpose. The allowance is shared platform-wide, so the
      * queue has to be drained globally or one workspace could starve another by
      * simply queueing first every morning.
+     *
+     * <p>No {@code @Transactional}. It would be a lie here - this is called from
+     * a sibling method on the same bean, so the proxy is never involved - and it
+     * is also unnecessary: the whole claim is ONE statement, and one statement is
+     * already atomic. Annotating it would suggest a guarantee that came from
+     * somewhere it did not.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    protected List<Row> claim() {
+    private List<Row> claim() {
         List<Row> rows = jdbc.query("""
                 update wa_send_queue q
                    set state = 'SENDING',
@@ -309,7 +314,7 @@ public class WhatsappSendQueueDrainJob {
         jdbc.update("""
                 update wa_send_queue
                    set state = 'PENDING',
-                       next_attempt_at = now() + make_interval(mins => ?),
+                       next_attempt_at = now() + (? * interval '1 minute'),
                        failure_code = ?, failure_reason = ?, leased_until = null
                  where id = ?
                 """, (int) minutes, result.errorCode(), result.failureReason(), row.id());
@@ -326,14 +331,20 @@ public class WhatsappSendQueueDrainJob {
         OffsetDateTime when = nextFreeAt == null
                 ? OffsetDateTime.now().plusMinutes(5)
                 : nextFreeAt.plusSeconds(30);
+        String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        Object[] args = new Object[ids.size() + 1];
+        args[0] = when;
+        for (int i = 0; i < ids.size(); i++) {
+            args[i + 1] = ids.get(i);
+        }
         jdbc.update("""
                 update wa_send_queue
                    set state = 'PENDING',
-                       next_attempt_at = greatest(?, now() + interval '30 seconds'),
+                       next_attempt_at = greatest(?::timestamptz, now() + interval '30 seconds'),
                        attempts = greatest(0, attempts - 1),
                        leased_until = null
-                 where id = any (?)
-                """, when, ids.toArray(UUID[]::new));
+                 where id in (%s)
+                """.formatted(placeholders), args);
     }
 
     /**

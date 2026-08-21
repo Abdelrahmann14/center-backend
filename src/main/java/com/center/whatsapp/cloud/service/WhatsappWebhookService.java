@@ -41,6 +41,7 @@ public class WhatsappWebhookService {
     private final ObjectMapper mapper;
     private final JdbcTemplate jdbc;
     private final CloudTemplateService templates;
+    private final com.center.whatsapp.quota.WhatsappQuotaService quota;
 
     /**
      * Whether {@code signature} is Meta's HMAC of exactly this body, using the app
@@ -88,6 +89,7 @@ public class WhatsappWebhookService {
                 switch (field) {
                     case "messages" -> messages(value);
                     case "message_template_status_update" -> templateStatus(value);
+                    case "phone_number_quality_update" -> numberQuality(value);
                     default -> log.debug("Ignoring webhook field {}", field);
                 }
             }
@@ -134,6 +136,31 @@ public class WhatsappWebhookService {
         for (JsonNode message : value.path("messages")) {
             log.info("Inbound WhatsApp message from {}", message.path("from").asText("?"));
         }
+    }
+
+    /**
+     * Meta changed what this number is allowed to do.
+     *
+     * <p>This is the only push notification of a messaging-limit change there
+     * is. Without it the ceiling on the send buttons would be whatever the
+     * six-hourly poll last saw, which means a teacher who has just been upgraded
+     * from 250 to 2,000 would keep being told they had run out for up to six
+     * hours after they had not.
+     *
+     * <p>Note what this webhook does NOT carry: the quality rating colour, and
+     * the consumption. Meta publishes neither here. The colour has to be polled,
+     * and the consumption has to be counted locally - there is no endpoint that
+     * answers "how much of my allowance is left".
+     */
+    private void numberQuality(JsonNode value) {
+        String event = value.path("event").asText(null);
+        JsonNode limit = value.path("current_limit");
+        Integer current = limit.isInt() ? limit.asInt() : null;
+        String label = limit.isTextual() ? limit.asText() : event;
+        if (event == null && current == null) {
+            return;
+        }
+        quota.applyWebhookTier(label, current);
     }
 
     /** Meta finished reviewing a template - approved, rejected, or paused. */
