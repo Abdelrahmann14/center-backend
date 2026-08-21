@@ -77,6 +77,30 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
             """, nativeQuery = true)
     List<String> allPhones(@Param("adminId") UUID adminId);
 
+    /**
+     * Every number on one student's row, guardians included.
+     *
+     * <p>For the WhatsApp check fired when a student is created: the listener
+     * runs on another thread with no tenant bound, so it addresses the student
+     * by the id the event carried rather than through a tenant-scoped read.
+     */
+    @Query(value = """
+            SELECT DISTINCT btrim(p)
+            FROM students s, unnest(s.student_phones || s.parent_phones) p
+            WHERE s.id = :studentId AND btrim(p) <> ''
+            """, nativeQuery = true)
+    List<String> phonesOf(@Param("studentId") UUID studentId);
+
+    /**
+     * Every workspace that has at least one student.
+     *
+     * <p>Native on purpose: the WhatsApp sweep runs on a timer with no tenant
+     * bound, and a JPQL query over a {@code @TenantId} entity would be filtered
+     * down to nothing there. This is the list it iterates.
+     */
+    @Query(value = "SELECT DISTINCT s.admin_id FROM students s", nativeQuery = true)
+    List<UUID> allWorkspaces();
+
     // ---- barcode card ------------------------------------------------------
     //
     // "Everyone who never got their card" is the resend button's whole audience,

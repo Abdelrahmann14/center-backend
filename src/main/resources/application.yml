@@ -204,10 +204,14 @@ app:
     # One instance for the whole platform: the answer is a property of the
     # number, so it is the same for every teacher and the cache is shared.
     # Blank credentials disable the check; nothing else stops working.
+    #
+    # An answer is kept for good - there is no re-check interval. A number is
+    # asked about once and again only if it changes, because a roster only grows
+    # and re-asking the whole thing on a timer turns a fixed cost into a
+    # recurring one. WhatsappNumberCheckJob is what does the asking.
     base-url: ${GREEN_CHECK_BASE_URL:https://api.green-api.com}
     instance-id: ${GREEN_CHECK_INSTANCE_ID:}
     token: ${GREEN_CHECK_TOKEN:}
-    ttl: ${GREEN_CHECK_TTL:P30D}
     enabled: ${GREEN_CHECK_ENABLED:true}
 
   google:

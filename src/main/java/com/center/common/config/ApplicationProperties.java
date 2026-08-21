@@ -114,13 +114,6 @@ public record ApplicationProperties(
             /** That instance's API token - a secret, environment only. */
             String token,
 
-            /**
-             * How long an answer is trusted before it is asked again. A number
-             * that gains or loses WhatsApp is rare but not impossible, and a
-             * permanent cache would make the first wrong answer permanent too.
-             */
-            @NotNull java.time.Duration ttl,
-
             boolean enabled) {
 
         /** True only when a real check can actually be attempted. */

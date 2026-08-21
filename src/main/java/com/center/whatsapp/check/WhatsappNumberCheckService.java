@@ -14,19 +14,31 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.center.common.config.ApplicationProperties;
 import com.center.whatsapp.service.WaPhone;
 
 import lombok.RequiredArgsConstructor;
 
 /**
- * "Is this number on WhatsApp", answered from a shared cache and topped up from
- * Green API when the cache has nothing fresh.
+ * "Is this number on WhatsApp", answered from a shared store and topped up from
+ * Green API for numbers nobody has asked about yet.
  *
- * <p>The cache is the point. A check is a call to a third party and Green rate
+ * <p>The store is the point. A check is a call to a third party and Green rate
  * limits them, so asking once per number and remembering the answer is what
  * makes this usable on a roster of hundreds - and because the table is not
  * tenant-scoped, a guardian shared between two teachers is one check, not two.
+ *
+ * <p><b>An answer never expires.</b> There used to be a trust window that
+ * re-asked about every number every 30 days, on the reasoning that a number can
+ * gain or lose WhatsApp. On a roster that only grows, that turns a fixed cost
+ * into a recurring one - the whole roster, again, every month, forever - which
+ * is the opposite of what the store is for. A number is asked about once, and
+ * again only if it CHANGES: editing a student's phone produces a number nobody
+ * has an answer for, and the sweep picks it up on its own. The old number keeps
+ * its answer, which is still true of it.
+ *
+ * <p>The cost of this: a family that installs WhatsApp after being marked
+ * unreachable stays marked unreachable. Clearing that number's row is what
+ * re-asks.
  */
 @Service
 @RequiredArgsConstructor
@@ -53,27 +65,22 @@ public class WhatsappNumberCheckService {
 
     private final GreenNumberCheckClient client;
     private final WhatsappNumberCheckRepository repo;
-    private final ApplicationProperties props;
 
     public boolean configured() {
         return client.configured();
-    }
-
-    private OffsetDateTime trustedSince() {
-        return OffsetDateTime.now().minus(props.numberCheck().ttl());
     }
 
     /** Everything currently known, keyed by the roster's local phone form. */
     @Transactional(readOnly = true)
     public Map<String, Boolean> known() {
         Map<String, Boolean> out = new HashMap<>();
-        for (WhatsappNumberCheck row : repo.allFresh(trustedSince())) {
+        for (WhatsappNumberCheck row : repo.findAll()) {
             out.put(row.getPhone(), row.isExistsWhatsapp());
         }
         return out;
     }
 
-    /** Which of these numbers has no fresh answer, in a stable order. */
+    /** Which of these numbers has no answer at all, in a stable order. */
     @Transactional(readOnly = true)
     public List<String> unanswered(Collection<String> phones) {
         Set<String> wanted = new LinkedHashSet<>();
@@ -86,7 +93,7 @@ public class WhatsappNumberCheckService {
         if (wanted.isEmpty()) {
             return List.of();
         }
-        for (WhatsappNumberCheck row : repo.freshFor(wanted, trustedSince())) {
+        for (WhatsappNumberCheck row : repo.answeredAmong(wanted)) {
             wanted.remove(row.getPhone());
         }
         return new ArrayList<>(wanted);
@@ -97,9 +104,9 @@ public class WhatsappNumberCheckService {
     }
 
     /**
-     * Ask Green about the next {@link #BATCH} numbers that have no fresh answer.
+     * Ask Green about the next {@link #BATCH} numbers that have no answer yet.
      *
-     * <p>A number Green could not answer for is left uncached on purpose, so it
+     * <p>A number Green could not answer for is left unstored on purpose, so it
      * is asked again next time rather than being recorded as having no WhatsApp.
      * A timeout is not a fact about the family.
      */
