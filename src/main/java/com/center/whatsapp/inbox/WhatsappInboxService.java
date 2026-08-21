@@ -21,6 +21,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.center.auth.security.AuthenticatedUser;
 import com.center.common.exception.BusinessRuleException;
 import com.center.common.tenant.TenantContext;
+import com.center.notification.service.NotificationService;
 import com.center.whatsapp.cloud.service.CloudApiClient;
 import com.center.whatsapp.cloud.service.WhatsappThrottle;
 import com.center.whatsapp.service.WaPhone;
@@ -77,6 +78,7 @@ public class WhatsappInboxService {
     private final CloudApiClient cloud;
     private final WhatsappThrottle throttle;
     private final WhatsappInstanceService instances;
+    private final NotificationService notifications;
     private final PlatformTransactionManager transactions;
 
     /**
@@ -160,7 +162,8 @@ public class WhatsappInboxService {
             return;
         }
 
-        UUID conversationId = conversation(adminId, phone, waId, names.get(waId), phoneNumberId);
+        Thread thread = conversation(adminId, phone, waId, names.get(waId), phoneNumberId);
+        UUID conversationId = thread.id();
         OffsetDateTime at = epochSeconds(message.path("timestamp").asText(null));
         String kind = message.path("type").asText("unsupported");
         Body body = readable(message, kind);
@@ -180,7 +183,7 @@ public class WhatsappInboxService {
             return;
         }
 
-        jdbc.update("""
+        Integer unread = jdbc.queryForObject("""
                 update wa_conversation
                    set last_inbound_at  = greatest(coalesce(last_inbound_at, ?::timestamptz), ?),
                        last_message_at  = greatest(last_message_at, ?),
@@ -191,9 +194,59 @@ public class WhatsappInboxService {
                        phone_number_id  = coalesce(?, phone_number_id),
                        updated_at       = now()
                  where id = ?
-                """, at, at, at, preview(body.text()), phoneNumberId, conversationId);
+                returning unread
+                """, Integer.class, at, at, at, preview(body.text()), phoneNumberId,
+                conversationId);
+
+        // One notification per conversation WAKING UP, not per message. Somebody
+        // typing four lines in a row is one person starting one conversation; a
+        // bell that rang four times for it would be the reason the bell stops
+        // being read. The next one comes after the thread has been opened, which
+        // is what puts the count back to zero.
+        if (unread != null && unread == 1) {
+            notifyStaff(adminId, conversationId, thread.displayName(), body.text());
+        }
 
         log.info("Inbound WhatsApp {} from {} filed in workspace {}", kind, phone, adminId);
+    }
+
+    /**
+     * Tells the workspace that somebody has written.
+     *
+     * <p>To everyone who could actually answer - the owner, and every assistant
+     * holding {@code NOTIFICATION_SEND} - because a message nobody is told about
+     * is a message nobody answers, and the desk, not the owner, is who is
+     * usually sitting there.
+     *
+     * <p>Never throws. This runs inside the webhook, where a failure loses the
+     * message itself; a bell that did not ring is worth strictly less than that.
+     */
+    private void notifyStaff(UUID adminId, UUID conversationId, String from, String preview) {
+        try {
+            // The role column is deliberately not touched: it is an enum mapped
+            // through a converter, and the two groups are identifiable without
+            // it - the owner BY id, an assistant BY the grant.
+            List<UUID> recipients = jdbc.queryForList("""
+                    select id from users where id = ? and is_active
+                    union
+                    select u.id
+                      from users u
+                      join user_permissions up on up.user_id = u.id
+                      join permissions p on p.id = up.permission_id
+                     where u.admin_id = ? and u.is_active and p.code = 'NOTIFICATION_SEND'
+                    """, UUID.class, adminId, adminId);
+
+            String body = preview == null || preview.isBlank()
+                    ? "رسالة جديدة على واتساب"
+                    : preview(preview);
+            for (UUID userId : recipients) {
+                // linkId carries the conversation, so the bell opens the thread
+                // rather than dropping the reader at a list to go and find it.
+                notifications.notify(userId, from, "chat", from, body, conversationId);
+            }
+        } catch (RuntimeException ex) {
+            log.warn("Could not raise an inbox notification: {}", ex.getMessage());
+        }
     }
 
     /**
@@ -234,7 +287,7 @@ public class WhatsappInboxService {
      * the unique key is what makes one of them lose cleanly instead of both
      * inserting.
      */
-    private UUID conversation(UUID adminId, String phone, String waId, String profileName,
+    private Thread conversation(UUID adminId, String phone, String waId, String profileName,
             String phoneNumberId) {
         Match match = matchStudent(adminId, phone);
         return jdbc.queryForObject("""
@@ -261,10 +314,20 @@ public class WhatsappInboxService {
                                               then wa_conversation.contact_kind
                                               else excluded.contact_kind end,
                        updated_at      = now()
-                returning id
-                """, UUID.class, adminId, phone, waId, profileName, phoneNumberId,
+                returning id, coalesce(student_name, profile_name, phone) as display_name
+                """, (rs, n) -> new Thread(rs.getObject("id", UUID.class),
+                        rs.getString("display_name")),
+                adminId, phone, waId, profileName, phoneNumberId,
                 match.studentId(), match.studentName(), match.studentCode(), match.kind());
     }
+
+    /**
+     * A thread and the name to call it by - the roster's, else their WhatsApp
+     * profile's, else the bare number. Decided in the database rather than in
+     * Java so the notification, the list row and the thread header cannot end up
+     * calling one person three things.
+     */
+    private record Thread(UUID id, String displayName) {}
 
     /** Who this number belongs to on the roster, as far as the roster knows. */
     private record Match(UUID studentId, String studentName, String studentCode, String kind) {
@@ -659,6 +722,7 @@ public class WhatsappInboxService {
             throw new BusinessRuleException("رقم غير صالح");
         }
         conversation(adminId, phone, WaPhone.international(phone), null, null);
+
         List<Conversation> rows = jdbc.query(
                 CONVERSATION_COLUMNS + " where c.admin_id = ? and c.phone = ?",
                 CONVERSATION, adminId, phone);
