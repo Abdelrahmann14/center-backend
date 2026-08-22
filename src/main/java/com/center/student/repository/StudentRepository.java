@@ -215,6 +215,81 @@ public interface StudentRepository extends JpaRepository<Student, UUID>, JpaSpec
     List<PhoneOwner> findPhoneOwners(@Param("phones") String phones, @Param("excludeId") UUID excludeId,
             @Param("adminId") UUID adminId);
 
+    // ---- Roster collisions -------------------------------------------------
+    //
+    // Read by the attendance desk for ONE student, not by a sweep. The students
+    // page finds duplicates by counting over the whole roster it already holds;
+    // the registration screen holds one student and cannot, so it asks.
+
+    /** A record that collides with another, named enough to be told apart. */
+    interface Peer {
+        UUID getId();
+
+        Integer getSerial();
+
+        String getName();
+
+        String getGrade();
+    }
+
+    /**
+     * Everyone else carrying this exact name.
+     *
+     * <p>JPQL, so {@code @TenantId} scopes it - one workspace's namesakes say
+     * nothing about another's. Exact equality, matching
+     * {@link #existsByNameAndIdNot}, which is what the create and update paths
+     * enforce: a check that flagged near-matches here would disagree with the
+     * rule that actually refuses a save.
+     */
+    @Query("""
+            SELECT s.id AS id, s.serial AS serial, s.name AS name, s.grade AS grade
+            FROM Student s
+            WHERE s.name = :name AND s.id <> :excludeId
+            ORDER BY s.serial
+            """)
+    List<Peer> findPeersByName(@Param("name") String name, @Param("excludeId") UUID excludeId);
+
+    /** A record sharing one number, and which of its two lists holds it. */
+    interface PhoneNeighbour extends Peer {
+        String getPhone();
+
+        /** True when the number is their own, false when it is their guardian's. */
+        Boolean getOwn();
+    }
+
+    /**
+     * Every other record holding any of these numbers, one row per (number,
+     * record).
+     *
+     * <p>Native because it unnests both phone arrays; the workspace is passed
+     * explicitly for the usual reason - a native query is outside Hibernate's
+     * {@code @TenantId} scoping.
+     *
+     * <p>The {@code bool_or} is not decoration. A record can carry the same
+     * number in BOTH of its lists (a student who is also their own contact),
+     * which unnests to two rows that {@code DISTINCT} would keep, and the desk
+     * would be shown the same person twice, once described wrongly. Folding them
+     * with OR both collapses the pair and keeps the stronger reading: their own
+     * number, which is the answer worth acting on.
+     */
+    @Query(value = """
+            SELECT phone, id, serial, name, grade, bool_or(own) AS own
+            FROM (
+              SELECT btrim(p) AS phone, s.id AS id, s.serial AS serial,
+                     s.name AS name, s.grade AS grade,
+                     btrim(p) = ANY(s.student_phones) AS own
+              FROM students s, unnest(s.student_phones || s.parent_phones) p
+              WHERE s.admin_id = :adminId
+                AND s.id <> :excludeId
+                AND btrim(p) <> ''
+                AND btrim(p) = ANY(string_to_array(:phones, ','))
+            ) x
+            GROUP BY phone, id, serial, name, grade
+            ORDER BY phone, serial
+            """, nativeQuery = true)
+    List<PhoneNeighbour> findPhoneNeighbours(@Param("phones") String phones,
+            @Param("excludeId") UUID excludeId, @Param("adminId") UUID adminId);
+
     /** Who a number belongs to, and in what capacity. */
     interface PhoneMatch {
         UUID getId();

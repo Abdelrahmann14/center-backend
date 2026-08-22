@@ -8,6 +8,7 @@ import org.springframework.data.domain.Pageable;
 
 import com.center.student.dto.StudentFilter;
 import com.center.student.dto.StudentRequest;
+import com.center.student.dto.StudentConflictResponse;
 import com.center.student.dto.StudentDuplicateResponse;
 import com.center.student.dto.StudentOptionsResponse;
 import com.center.student.dto.StudentResponse;
@@ -27,6 +28,17 @@ public interface StudentService {
     StudentDuplicateResponse checkDuplicates(String name, List<String> phones, UUID excludeId);
 
     StudentResponse findById(UUID studentId);
+
+    /**
+     * Who else on the roster shares this student's name or numbers.
+     *
+     * <p>Advisory, like {@link #checkDuplicates}, but asked from the other end:
+     * that one answers "is what I am typing already taken", this one answers
+     * "who is the person in front of me being confused with". The attendance
+     * desk needs the second and cannot compute it - it loads one student, never
+     * the roster.
+     */
+    StudentConflictResponse conflicts(UUID studentId);
 
     StudentResponse create(StudentRequest request);
 

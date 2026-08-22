@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.center.student.dto.DiscountReasonRequest;
 import com.center.student.dto.StudentFilter;
 import com.center.student.dto.StudentRequest;
+import com.center.student.dto.StudentConflictResponse;
 import com.center.student.dto.StudentDuplicateResponse;
 import com.center.student.dto.StudentOptionsResponse;
 import com.center.student.dto.StudentResponse;
@@ -75,6 +76,19 @@ public class StudentController {
     @PreAuthorize("hasAnyAuthority('PERM_STUDENT_VIEW','PERM_REGISTRATION_ACCESS')")
     public StudentResponse findById(@PathVariable UUID studentId) {
         return studentService.findById(studentId);
+    }
+
+    /**
+     * Same audience as the student itself: whoever may see this record may be
+     * told which other records it is confusable with, and the attendance desk -
+     * which holds REGISTRATION_ACCESS and not necessarily STUDENT_VIEW - is the
+     * caller this exists for.
+     */
+    @GetMapping("/{studentId}/conflicts")
+    @PreAuthorize("hasAnyAuthority('PERM_STUDENT_VIEW','PERM_REGISTRATION_ACCESS')")
+    @Operation(summary = "Who else shares this student's name or numbers (advisory)")
+    public StudentConflictResponse conflicts(@PathVariable UUID studentId) {
+        return studentService.conflicts(studentId);
     }
 
     @PostMapping

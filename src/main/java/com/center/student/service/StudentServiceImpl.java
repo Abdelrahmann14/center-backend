@@ -3,6 +3,7 @@ import com.center.google.event.GoogleContactEvents;
 import com.center.google.repository.GoogleContactLinkRepository;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.center.common.constants.ValidationRules;
 import com.center.student.dto.StudentFilter;
 import com.center.student.dto.StudentRequest;
+import com.center.student.dto.StudentConflictResponse;
 import com.center.student.dto.StudentDuplicateResponse;
 import com.center.student.dto.StudentOptionsResponse;
 import com.center.student.dto.StudentResponse;
@@ -114,6 +116,67 @@ public class StudentServiceImpl implements StudentService {
             }
         }
         return new StudentDuplicateResponse(nameTaken, owners);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public StudentConflictResponse conflicts(UUID studentId) {
+        Student student = studentRepository.findById(studentId)
+                .orElseThrow(() -> new ResourceNotFoundException(NOT_FOUND));
+
+        String name = student.getName() == null ? "" : student.getName().strip();
+        List<StudentConflictResponse.Peer> sameName = name.isEmpty()
+                ? List.of()
+                : studentRepository.findPeersByName(name, studentId).stream()
+                        .map(p -> peer(p, null))
+                        .toList();
+
+        // A number on both of the student's OWN lists is treated as theirs. The
+        // two answers differ in what they ask the reader to do - their own
+        // number clashing is a fault, a guardian number shared is usually a
+        // sibling - and the fault is the one that must not be swallowed.
+        Set<String> mine = digits(student.getStudentPhones());
+        Set<String> guardian = digits(student.getParentPhones());
+        guardian.removeAll(mine);
+
+        Set<String> all = new LinkedHashSet<>(mine);
+        all.addAll(guardian);
+        Map<String, List<StudentConflictResponse.Peer>> byPhone = new LinkedHashMap<>();
+        if (!all.isEmpty()) {
+            for (var n : studentRepository.findPhoneNeighbours(
+                    String.join(",", all), studentId, currentAdmin())) {
+                byPhone.computeIfAbsent(n.getPhone(), key -> new ArrayList<>())
+                        .add(peer(n, !Boolean.TRUE.equals(n.getOwn())));
+            }
+        }
+        return new StudentConflictResponse(sameName, clashes(mine, byPhone),
+                clashes(guardian, byPhone));
+    }
+
+    /** The numbers of one list that somebody else also holds, in the stored order. */
+    private static List<StudentConflictResponse.PhoneClash> clashes(
+            Set<String> phones, Map<String, List<StudentConflictResponse.Peer>> byPhone) {
+        return phones.stream()
+                .filter(byPhone::containsKey)
+                .map(phone -> new StudentConflictResponse.PhoneClash(phone, byPhone.get(phone)))
+                .toList();
+    }
+
+    private static StudentConflictResponse.Peer peer(StudentRepository.Peer row, Boolean asGuardian) {
+        return new StudentConflictResponse.Peer(row.getId(), row.getSerial(), row.getName(),
+                row.getGrade(), asGuardian);
+    }
+
+    /** One list's numbers, digits-only and deduplicated, in the order stored. */
+    private static Set<String> digits(String[] phones) {
+        Set<String> out = new LinkedHashSet<>();
+        for (String phone : phones == null ? new String[0] : phones) {
+            String d = TextUtils.digitsOnly(phone);
+            if (!d.isEmpty()) {
+                out.add(d);
+            }
+        }
+        return out;
     }
 
     @Override

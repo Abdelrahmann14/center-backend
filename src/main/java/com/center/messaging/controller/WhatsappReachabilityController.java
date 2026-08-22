@@ -37,7 +37,12 @@ public class WhatsappReachabilityController {
     private final WhatsappNumberCheckService numberCheck;
 
     @GetMapping("/reachability")
-    @PreAuthorize("hasAnyAuthority('PERM_STUDENT_VIEW','PERM_NOTIFICATION_SEND')")
+    // REGISTRATION_ACCESS is here for the attendance desk, which is where a
+    // wrong number is actually found: the student is standing at the counter and
+    // can be asked. An assistant who may register but may not browse the roster
+    // was the one person who could fix it and the only one not being told.
+    @PreAuthorize("hasAnyAuthority('PERM_STUDENT_VIEW','PERM_NOTIFICATION_SEND',"
+            + "'PERM_REGISTRATION_ACCESS')")
     @Operation(summary = "Phone -> whether WhatsApp can reach it",
             description = "Merges the number check with this workspace's own delivery "
                     + "reports. A number that is absent has never been checked or "
