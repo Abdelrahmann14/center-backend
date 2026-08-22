@@ -78,7 +78,26 @@ spring:
     properties:
       hibernate:
         jdbc:
-          time_zone: UTC
+          # NO time_zone here, deliberately. It used to say UTC, and that setting
+          # only ever reaches three JDBC types - TIME, DATE and plain TIMESTAMP -
+          # by making Hibernate bind and read them through a UTC Calendar. This
+          # schema has no plain TIMESTAMP at all (every one of them is
+          # timestamptz, which carries its own offset and is not touched by
+          # this), so the only columns it reached were the seven that are
+          # deliberately zone-LESS: a group's start_time, and six dates.
+          #
+          # A wall-clock has no timezone, so converting it through one is not a
+          # correction - it is a corruption whose size is the JVM's offset. On
+          # the server that offset is zero (the container runs Etc/UTC) and the
+          # bug was invisible. On a machine in Egypt a lesson stored as 10:00
+          # read back as 12:00, and one typed as 16:00 was written as 14:00 into
+          # the SAME shared database - so the desk saw the right time and the
+          # server saw a different one. A birth date typed as 2010-05-03 was
+          # stored as 2010-05-02.
+          #
+          # Removing it makes the binding symmetric on every machine. It changes
+          # nothing on the server, where the UTC calendar and the default
+          # calendar were already the same object's worth of offset.
           batch_size: 50
         order_inserts: true
         order_updates: true
